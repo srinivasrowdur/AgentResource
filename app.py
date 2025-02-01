@@ -7,6 +7,8 @@ from llama_agents import create_agent
 import os
 from dotenv import load_dotenv
 import re
+from llama_index.core.callbacks import LlamaDebugHandler, CallbackManager
+from llama_index.core.llms import ChatMessage, MessageRole
 
 # Load environment variables
 load_dotenv()
@@ -21,7 +23,7 @@ if not os.getenv('OPENAI_API_KEY'):
     st.stop()
 
 # Initialize OpenAI
-Settings.llm = OpenAI(model="gpt-4", api_key=os.getenv("OPENAI_API_KEY"))
+Settings.llm = OpenAI(model="gpt-4o-mini", api_key=os.getenv("OPENAI_API_KEY"))
 
 # Initialize Firebase
 try:
@@ -92,13 +94,62 @@ def handle_query(prompt: str):
     # Create a placeholder for the assistant's response
     with st.chat_message("assistant"):
         message_placeholder = st.empty()
+        thinking_placeholder = st.empty()
+        
         with st.spinner("Thinking..."):
-            # Get assistant response
-            response = agent.chat(prompt)
+            # Create a container for thoughts
+            thoughts_container = thinking_placeholder.container()
+            thoughts = []
+            
+            # Create callback to capture thoughts
+            class ThoughtCallback(LlamaDebugHandler):
+                def on_event(self, event_type: str, payload: dict) -> None:
+                    if event_type == "agent_step":
+                        if "thought" in payload:
+                            thought = payload["thought"].strip()
+                            if thought and not thought.startswith("I can answer without"):
+                                thoughts.append(thought)
+                                thoughts_container.info(f"💭 Step {len(thoughts)}: {thought}")
+            
+            # Build chat history context
+            chat_history = []
+            for msg in st.session_state.messages[-5:]:  # Last 5 messages for context
+                role = MessageRole.USER if msg["role"] == "user" else MessageRole.ASSISTANT
+                chat_history.append(ChatMessage(
+                    role=role,
+                    content=msg["content"]
+                ))
+                if "context" in msg:  # Add any stored context
+                    chat_history.append(ChatMessage(
+                        role=MessageRole.SYSTEM,
+                        content=f"Context: {msg['context']}"
+                    ))
+            
+            # Create new agent with callback and context
+            callback_manager = CallbackManager([ThoughtCallback()])
+            tools = ResourceQueryTools(db, db)
+            agent_with_callback = create_agent(tools.get_tools(), Settings.llm, callback_manager)
+            
+            # Get assistant response with context
+            response = agent_with_callback.chat(
+                prompt,
+                chat_history=chat_history
+            )
+            
+            # Store any relevant context for future use
+            context = None
+            if "consultants" in prompt.lower() or "availability" in prompt.lower():
+                context = response.response  # Store the response as context
+            
+            # Format and display final response
             formatted_response = format_agent_response(response.response)
-            # Update placeholder with response
             message_placeholder.markdown(formatted_response)
-            st.session_state.messages.append({"role": "assistant", "content": formatted_response})
+            st.session_state.messages.append({
+                "role": "assistant", 
+                "content": formatted_response,
+                "thoughts": thoughts,
+                "context": context
+            })
 
 # Streamlit UI
 st.title("Resource Management Assistant")
@@ -121,7 +172,15 @@ st.markdown("---")
 # Display chat history
 for message in st.session_state.messages:
     with st.chat_message(message["role"]):
-        st.markdown(format_agent_response(message["content"]))
+        if message["role"] == "assistant":
+            if "thoughts" in message and message["thoughts"]:
+                with st.container():
+                    st.write("🤔 **My Thinking Process:**")
+                    for i, thought in enumerate(message["thoughts"], 1):
+                        st.info(f"💭 Step {i}: {thought}")
+            st.markdown(format_agent_response(message["content"]))
+        else:
+            st.markdown(message["content"])
 
 # Handle chat input
 if prompt := st.chat_input("Ask about employee availability..."):

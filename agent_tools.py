@@ -132,51 +132,34 @@ class ResourceQueryTools:
                     name: Optional[str] = None) -> str:
         """Query people data efficiently"""
         try:
-            # Validate inputs
-            if rank and not self.validate_query(rank):
-                return "Invalid rank query"
-            if location and not self.validate_query(location):
-                return "Invalid location query"
-                
-            # Build server-side filters
+            # Build server-side filters first
             filters = {}
+            
             if rank:
-                normalized_rank = self._semantic_match(rank, "rank")
-                if normalized_rank and normalized_rank.lower() != "none":
-                    filters['rank'] = normalized_rank
+                # Capitalize first letter of each word for rank
+                filters['rank'] = rank.title()
                 
             if location:
-                normalized_location = self._semantic_match(location, "location")
-                if normalized_location and normalized_location.lower() != "none":
-                    filters['location'] = normalized_location
+                filters['location'] = location.title()
+                
+            if name:
+                # Add name filter at database level
+                filters['name'] = name
+                
+            # Debug print
+            print(f"Query filters: {filters}")
             
             # Get filtered data from server
             employees = fetch_employees(self.db, filters)
             
-            # Apply remaining filters client-side only if needed
-            if name:
-                employees = self._find_employee_by_name(name, employees)
-            
-            if skills:
-                normalized_skills = [
-                    self._semantic_match(skill, "skill")
-                    for skill in skills
-                    if self._semantic_match(skill, "skill").lower() != "none"
-                ]
-                if normalized_skills:
-                    employees = [
-                        emp for emp in employees
-                        if any(skill.lower() in [s.lower() for s in emp["skills"]] 
-                              for skill in normalized_skills)
-                    ]
-            
+            # Format results
             if not employees:
                 return "No employees found matching your criteria."
             
-            # Format as markdown table
             table = "| Name | Location | Rank | Skills | Employee ID |\n"
             table += "|------|----------|------|---------|-------------|\n"
             
+            # Fix sorting to use the official_name from rank dictionary
             for emp in sorted(employees, key=lambda x: (x["rank"]["official_name"], x["name"])):
                 skills_str = ", ".join(emp["skills"])
                 table += f"| {emp['name']} | {emp['location']} | {emp['rank']['official_name']} | {skills_str} | {emp['employee_number']} |\n"
@@ -184,6 +167,7 @@ class ResourceQueryTools:
             return table
             
         except Exception as e:
+            print(f"Debug - Error details: {str(e)}")  # Add detailed error logging
             return f"Error querying employees: {str(e)}"
 
     def query_availability(self, 
@@ -234,10 +218,19 @@ class ResourceQueryTools:
                 MUST be used before querying availability by name.
                 
                 Parameters:
-                - name (optional): Name of the employee to search for
-                - skills (optional): List of skills to filter by
-                - location (optional): Location to filter by
-                - rank (optional): Rank to filter by
+                - name (optional): Name of the employee to search for (e.g. ['Alice', 'Bob'])
+                - rank (optional): Official job title to filter by. Valid ranks are:
+                  * Partner
+                  * Associate Partner  
+                  * Principal Consultant
+                  * Managing Consultant
+                  * Senior Consultant
+                  * Consultant
+                - skills (optional): Technical/business expertise to filter by (e.g. ['Backend Developer', 'AWS Engineer'])
+                - location (optional): Office location to filter by (London, Manchester, Bristol, Belfast)
+                
+                IMPORTANT: Use 'rank' parameter ONLY for job titles, not skills.
+                Example: Use {'rank': 'Consultant'}, NOT {'skills': ['Consultant']}
                 
                 Returns JSON string of matching employees with their employee_numbers.
                 """

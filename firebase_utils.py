@@ -38,25 +38,28 @@ def create_sample_data(db):
     
     return len(employees)
 
-def fetch_employees(db, filters=None) -> List[dict]:
-    """Fetch employees with server-side filtering"""
+def fetch_employees(db, filters: Dict = None) -> List[Dict]:
+    """Fetch employees with optional filters"""
     try:
+        # Start with base query
         query = db.collection('employees')
         
-        # Apply server-side filters if provided
+        # Apply filters if provided
         if filters:
             if 'rank' in filters:
                 query = query.where('rank.official_name', '==', filters['rank'])
             if 'location' in filters:
                 query = query.where('location', '==', filters['location'])
-            # Add index for compound queries in production
-            
-        # Use pagination for large datasets
-        page_size = 100  # Adjust based on your needs
-        docs = query.limit(page_size).stream()
+            if 'name' in filters:
+                query = query.where('name', '==', filters['name'])
         
-        employees = [doc.to_dict() for doc in docs]
-        return employees
+        # Execute query
+        docs = query.stream()
+        
+        # Debug print the query
+        print(f"Firebase Query: collection='employees' filters={filters}")
+        
+        return [doc.to_dict() for doc in docs]
         
     except Exception as e:
         print(f"Error fetching employees: {str(e)}")
@@ -111,14 +114,20 @@ def fetch_availability_batch(db, employee_numbers: List[str], weeks: List[int]) 
                 emp_data = emp_doc.to_dict()
                 avail_data = avail_doc.to_dict()
                 
-                # Get weeks data
+                # Get weeks data - Fix the week query
                 weeks_ref = avail_doc.reference.collection('weeks')
-                week_docs = weeks_ref.where('week_number', 'in', weeks).stream()
-                
-                weeks_data = {
-                    doc.id: doc.to_dict()
-                    for doc in week_docs
+                # Convert week numbers to week_1, week_2 format
+                week_docs = {
+                    f"week_{week}": weeks_ref.document(f"week_{week}").get()
+                    for week in weeks
                 }
+                
+                weeks_data = {}
+                for week_key, doc in week_docs.items():
+                    if doc.exists:
+                        weeks_data[week_key] = doc.to_dict()
+                    else:
+                        weeks_data[week_key] = {"status": "Unknown", "notes": "No data"}
                 
                 results[emp_id] = {
                     "employee_data": emp_data,
