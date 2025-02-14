@@ -34,96 +34,51 @@ def preprocess_query(query: str) -> Dict[str, any]:
     }
 
 class ResourceQueryTools:
-    def __init__(self, db, _):  # Second parameter kept for compatibility
+    def __init__(self, db, availability_db):
         self.db = db
-        self.llm = Settings.llm
-
-    def validate_query(self, query: str) -> bool:
-        """Basic query validation"""
-        if not query or len(query.strip()) < 3:
-            return False
-        return True
-
-    def _semantic_match(self, query: str, category: str) -> str:
-        """Use LLM to understand and match query semantically"""
-        prompts = {
-            "skill": """
-            Given the input '{query}', map it to the most appropriate skill from our standard skills list:
-            - Full Stack Developer (includes: fullstack, full-stack, full stack dev)
-            - Backend Developer (includes: backend, back-end, server-side)
-            - Frontend Developer (includes: frontend, front-end, UI developer)
-            - AWS Engineer (includes: cloud engineer, aws specialist)
-            - GCP Engineer (includes: google cloud, cloud platform)
-            - Architect (includes: solution architect, technical architect)
-            - Business Analyst (includes: BA, business analytics)
-            - Product Manager (includes: PM, product owner)
-            - Agile Coach (includes: scrum master, agile trainer)
-            
-            Return ONLY the exact skill name from the list above, or None if no match.
-            """,
-            "rank": """
-            Match '{query}' to exactly one of these ranks:
-            Partner
-            Associate Partner
-            Principal Consultant
-            Managing Consultant
-            Senior Consultant
-            Consultant
-
-            Rules:
-            1. Return ONLY the exact rank name from the list above
-            2. Do not add any explanation or extra text
-            3. Do not add quotes
-            4. If no match found, return None
-
-            For example:
-            'partner' matches to: Partner
-            'sc' matches to: Senior Consultant
-            'associate' matches to: Associate Partner
-            'unknown' matches to: None
-            """,
-            "location": """
-            Given the input '{query}', return EXACTLY ONE of these location names:
-            - London
-            - Manchester
-            - Bristol
-            - Belfast
-
-            Return ONLY the exact location name, nothing else.
-            """
+        self.availability_db = availability_db
+        
+        # Keep only the standard/canonical forms
+        self.standard_skills = {
+            "Frontend Developer",
+            "Backend Developer",
+            "Full Stack Developer",
+            "AWS Engineer",
+            "GCP Engineer",
+            "Cloud Engineer",
+            "Architect",
+            "Product Manager",
+            "Agile Coach",
+            "Business Analyst"
         }
 
-        prompt = prompts.get(category, "").format(query=query)
-        response = self.llm.complete(prompt)
+    def translate_skill_query(self, skill_query: str) -> Optional[str]:
+        """Use LLM to translate skill query to standard form"""
+        prompt = f"""Given this request: "{skill_query}"
+        Map it to ONE of our standard skills:
+        {', '.join(sorted(self.standard_skills))}
         
-        # Clean up the response
-        result = response.text.strip().replace('"', '').replace("'", "")
+        Rules:
+        1. Return EXACTLY ONE skill from the list above
+        2. Match variations like:
+           - "frontend engineer" → "Frontend Developer"
+           - "UI developer" → "Frontend Developer"
+           - "AWS resource" → "AWS Engineer"
+        3. Return the EXACT skill name with correct capitalization
+        4. If no match, return "None"
         
-        # If result is too long, it's probably an explanation rather than a match
-        if len(result.split()) > 3:
-            print("Response too long, defaulting to None")
-            return "None"
+        Examples:
+        Input: "frontend engineer" → Output: Frontend Developer
+        Input: "AWS resource" → Output: AWS Engineer
+        Input: "random skill" → Output: None
+        """
         
-        return result
-
-    def _find_employee_by_name(self, name: str, employees: List[dict]) -> List[dict]:
-        """Find employee by name using various matching strategies"""
-        if not name:
-            return employees
-
-        name = name.lower().strip()
+        response = Settings.llm.complete(prompt)
+        normalized = response.text.strip()
         
-        # Try exact match first
-        matches = [emp for emp in employees if emp["name"].lower() == name]
-        if matches:
-            return matches
-
-        # Try contains match
-        matches = [emp for emp in employees if name in emp["name"].lower()]
-        if matches:
-            return matches
-
-        return []
+        if normalized in self.standard_skills:
+            return normalized
+        return None
 
     def query_people(self, 
                     skills: Optional[List[str]] = None,
@@ -134,32 +89,53 @@ class ResourceQueryTools:
         """Query people data efficiently"""
         try:
             # Debug print
-            print(f"PeopleQuery called with: employee_number={employee_number}, location={location}, rank={rank}, name={name}, skills={skills}")
+            print(f"Original query: skills={skills}, location={location}, rank={rank}")
+            
+            # Translate skills if provided
+            if skills:
+                normalized_skills = []
+                for skill in skills:
+                    translated = self.translate_skill_query(skill)
+                    if translated:
+                        normalized_skills.append(translated)
+                    else:
+                        print(f"Warning: Could not translate skill '{skill}'")
+                
+                # Only update skills if we got valid translations
+                if normalized_skills:
+                    skills = normalized_skills
+                    print(f"Translated skills: {skills}")
+                else:
+                    return "I couldn't understand the requested skill. Please use terms like 'Frontend Developer', 'Backend Developer', 'AWS Engineer', etc."
             
             # Build server-side filters first
             filters = {}
             
             if employee_number:
                 filters['employee_number'] = employee_number
-                print(f"Searching by employee number: {employee_number}")
-                
+            
             if rank:
                 filters['rank'] = rank.title()
-                
+            
             if location:
                 filters['location'] = location.title()
-                
+            
             if name:
                 filters['name'] = name
-                
+            
+            if skills:
+                # Add skills to server-side filters
+                filters['skills'] = skills[0]  # Use first skill for initial filter
+            
             # Get filtered data from server
             print(f"Executing query with filters: {filters}")
             employees = fetch_employees(self.db, filters)
             print(f"Query returned {len(employees)} results")
             
-            # Apply skills filter in memory if needed
-            if skills:
-                employees = [emp for emp in employees if any(skill in emp["skills"] for skill in skills)]
+            # Apply additional skills filters in memory if needed
+            if skills and len(skills) > 1:
+                employees = [emp for emp in employees 
+                           if all(skill in emp["skills"] for skill in skills)]
             
             # Format results
             if not employees:
@@ -215,46 +191,58 @@ class ResourceQueryTools:
         except Exception as e:
             return f"Error querying availability: {str(e)}"
 
+    def query_available_people(self,
+                         skills: Optional[List[str]] = None,
+                         location: Optional[str] = None,
+                         rank: Optional[str] = None,
+                         weeks: Optional[List[int]] = None) -> str:
+        """Query people with their availability in one go"""
+        try:
+            # First get matching people
+            people_results = self.query_people(skills=skills, location=location, rank=rank)
+            if "No employees found" in people_results:
+                return people_results
+            
+            # Extract employee numbers
+            emp_numbers = []
+            for line in people_results.split('\n'):
+                if '|' in line and 'EMP' in line:
+                    emp_numbers.append(line.split('|')[-2].strip())
+            
+            # Get availability in one query
+            availability = self.query_availability(emp_numbers, weeks)
+            
+            return f"Found matching employees:\n{people_results}\n\nAvailability:\n{availability}"
+        except Exception as e:
+            return f"Error querying available people: {str(e)}"
+
     def get_tools(self) -> List[FunctionTool]:
         """Get the tools for the agent to use"""
         return [
             FunctionTool.from_defaults(
-                fn=self.query_people,
-                name="PeopleQuery",
+                fn=self.query_available_people,
+                name="QueryAvailablePeople",
                 description="""
-                Query people data to get employee details including their employee_number.
-                MUST be used before querying availability by name.
+                Query people and their availability in one go.
+                Use this for questions about who is available.
                 
                 Parameters:
-                - name (optional): Name of the employee to search for (e.g. ['Alice', 'Bob'])
-                - rank (optional): Official job title to filter by. Valid ranks are:
-                  * Partner
-                  * Associate Partner  
-                  * Principal Consultant
-                  * Managing Consultant
-                  * Senior Consultant
-                  * Consultant
-                - skills (optional): Technical/business expertise to filter by (e.g. ['Backend Developer', 'AWS Engineer'])
-                - location (optional): Office location to filter by (London, Manchester, Bristol, Belfast)
+                - skills: List of skills to filter by (e.g., ['Frontend Developer'])
+                - location (optional): Office location
+                - rank (optional): Job title
+                - weeks: List of week numbers to check (e.g., [1] for week 1)
                 
-                IMPORTANT: Use 'rank' parameter ONLY for job titles, not skills.
-                Example: Use {'rank': 'Consultant'}, NOT {'skills': ['Consultant']}
-                
-                Returns JSON string of matching employees with their employee_numbers.
+                Example: {'skills': ['Frontend Developer'], 'weeks': [1]}
                 """
+            ),
+            FunctionTool.from_defaults(
+                fn=self.query_people,
+                name="PeopleQuery",
+                description="Use only for queries that don't involve availability"
             ),
             FunctionTool.from_defaults(
                 fn=self.query_availability,
                 name="AvailabilityQuery",
-                description="""
-                Query availability data using employee_number (NOT names).
-                REQUIRES employee_number from PeopleQuery first.
-                
-                Parameters:
-                - employee_number: Single employee ID or list of employee IDs
-                - weeks (optional): List of week numbers to query (1-8)
-                
-                Returns weekly availability data for each employee.
-                """
+                description="Use only when you already have employee numbers"
             )
         ]

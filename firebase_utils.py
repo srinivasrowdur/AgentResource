@@ -53,6 +53,8 @@ def fetch_employees(db, filters=None):
                     query = query.where('location', '==', value)
                 elif field == 'rank':
                     query = query.where('rank.official_name', '==', value)
+                elif field == 'skills':
+                    query = query.where('skills', 'array_contains', value)
                     
         # Execute query
         docs = query.stream()
