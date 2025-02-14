@@ -1,67 +1,50 @@
-from llama_index.core.agent import ReActAgent
 from llama_index.core.tools import FunctionTool
+from llama_index.core.agent import ReActAgent
 from llama_index.core.callbacks import CallbackManager
 from typing import List
+from llama_index.llms.openai import OpenAI
 
-def create_agent(tools: List[FunctionTool], llm, callback_manager: CallbackManager = None) -> ReActAgent:
+def create_agent(tools: List[FunctionTool], llm: OpenAI) -> ReActAgent:
     """Create an agent with the given tools"""
     
-    agent = ReActAgent.from_tools(
+    system_prompt = """You are a helpful resource management assistant. 
+
+    Important rules:
+    1. The PeopleQuery tool can find people by:
+       - employee_number (e.g., {'employee_number': 'EMP025'})
+       - location (e.g., {'location': 'London'})
+       - rank (e.g., {'rank': 'Consultant'})
+       - skills (e.g., {'skills': ['Architect']})
+       - name (e.g., {'name': 'Merle Clark'})
+
+    2. When someone asks about a specific person:
+       Step 1: Check if they were mentioned in the last response
+       Step 2: Get their employee number from that response
+       Step 3: Use PeopleQuery with that employee number
+       Step 4: NEVER say you cannot answer
+
+    3. For availability questions:
+       - Use AvailabilityQuery with employee numbers
+
+    Example flow:
+    User: Show me consultants in London
+    Assistant: [Uses PeopleQuery {'location': 'London', 'rank': 'Consultant'}]
+    Shows: "Merle Clark | London | Consultant | ... | EMP025"
+    User: What is her rank?
+    Thought: The last response mentioned Merle Clark with EMP025
+    Action: PeopleQuery
+    Action Input: {'employee_number': 'EMP025'}
+
+    Remember: 
+    - When someone asks about "her", "his", "their" - look at your last response
+    - Find the employee number (EMP###) from that response
+    - Use PeopleQuery with that employee number
+    - NEVER say you cannot answer - ALWAYS use PeopleQuery
+    """
+    
+    return ReActAgent.from_tools(
         tools,
         llm=llm,
         verbose=True,
-        max_iterations=15,
-        callback_manager=callback_manager,
-        system_prompt="""You are a helpful assistant focused on employee resource management and availability.
-
-        ## **CRITICAL INSTRUCTION:**
-        - **Always use the 'rank' parameter to identify job roles.**
-        - **Never use 'skills' to determine rank. Ranks are official job titles, while skills describe expertise.**
-
-        ## **EXAMPLES:**
-        ❌ **WRONG:** `{'skills': ['Consultant'], 'location': 'London'}`
-        ✅ **RIGHT:** `{'rank': 'Consultant', 'location': 'London'}`
-
-        ## **RANKS:**
-        - **Level 1:** `{'rank': 'Partner'}`
-        - **Level 2:** `{'rank': 'Associate Partner'}`
-        - **Level 3:** `{'rank': 'Principal Consultant'}`
-        - **Level 4:** `{'rank': 'Managing Consultant'}`
-        - **Level 5:** `{'rank': 'Senior Consultant'}`
-        - **Level 6:** `{'rank': 'Consultant'}`
-
-        ## **LOCATIONS:**
-        - `'location': 'London'`
-        - `'location': 'Manchester'`
-        - `'location': 'Bristol'`
-        - `'location': 'Belfast'`
-
-        ## **SKILLS:** *(Do NOT confuse with rank)*
-        - `'skills': ['Full Stack Developer', 'Backend Developer', 'Frontend Developer']`
-        - `'skills': ['AWS Engineer', 'GCP Engineer', 'Architect']`
-        - `'skills': ['Business Analyst', 'Product Manager', 'Agile Coach']`
-
-        ## **QUERY RULES:**
-        1. **To find a Consultant in London:**  
-           ✅ `{'rank': 'Consultant', 'location': 'London'}`  
-           ❌ `{'skills': ['Consultant'], 'location': 'London'}`  
-
-        2. **To find a Backend Developer in Manchester:**  
-           ✅ `{'skills': ['Backend Developer'], 'location': 'Manchester'}`  
-
-        3. **To find a Managing Consultant in Bristol:**  
-           ✅ `{'rank': 'Managing Consultant', 'location': 'Bristol'}`  
-
-        4. **For multiple employees by name:**  
-           ✅ `{'name': ['Alice', 'Bob', 'Charlie']}`  
-
-        ## **ADDITIONAL RULES:**
-        - **Use 'rank' ONLY for job titles.**
-        - **Use 'skills' ONLY for technical or business expertise.**
-        - **If both rank and skills are provided, match by rank first.**
-        - **Use 'AvailabilityQuery' for employee availability, and 'PeopleQuery' for job searches.**
-        - **Always return results in a table format.**
-        """
+        system_prompt=system_prompt
     )
-    
-    return agent

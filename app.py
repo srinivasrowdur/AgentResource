@@ -30,8 +30,13 @@ if not os.getenv('OPENAI_API_KEY'):
 try:
     # Create a client to check models
     client = OpenAIClient(api_key=os.getenv("OPENAI_API_KEY"))
-    models = client.models.list()
-    print("Available models:", [model.id for model in models])
+    
+    # Initialize LLM settings
+    Settings.llm = OpenAI(
+        model="gpt-4o-mini",
+        api_key=os.getenv("OPENAI_API_KEY"),
+        temperature=0.1
+    )
 except Exception as e:
     st.error(f"Error initializing OpenAI: {str(e)}")
     st.stop()
@@ -44,9 +49,9 @@ except Exception as e:
     st.error("Please check your Firebase credentials file path")
     st.stop()
 
-# Create agent without caching for testing
-tools = ResourceQueryTools(db, db)
-agent = create_agent(tools.get_tools(), Settings.llm)
+# Remove global agent creation
+# tools = ResourceQueryTools(db, db)
+# agent = create_agent(tools.get_tools(), Settings.llm)
 
 def format_agent_response(response: str) -> str:
     """Format agent response to preserve tables"""
@@ -69,6 +74,8 @@ def format_agent_response(response: str) -> str:
 # Initialize session state
 if "messages" not in st.session_state:
     st.session_state.messages = []
+if "last_employee_number" not in st.session_state:
+    st.session_state.last_employee_number = None
 
 def handle_query(prompt: str):
     """Handle query and update session state"""
@@ -86,46 +93,62 @@ def handle_query(prompt: str):
         with st.spinner("Thinking..."):
             # Force update OpenAI settings
             api_key = os.getenv("OPENAI_API_KEY")
-            os.environ["OPENAI_API_KEY"] = api_key  # Update environment variable
+            os.environ["OPENAI_API_KEY"] = api_key
             
             # Create fresh LLM instance and update global settings
             llm = OpenAI(
                 model="gpt-4o-mini",
                 api_key=api_key,
-                temperature=0.1  # Remove additional_kwargs
+                temperature=0.1
             )
-            Settings.llm = llm  # Update global settings
+            Settings.llm = llm
             
             # Create fresh tools and agent
             tools = ResourceQueryTools(db, db)
             current_agent = create_agent(tools.get_tools(), llm)
             
-            # Build chat history context
+            # Build chat history context with last employee number
             chat_history = []
-            for msg in st.session_state.messages[-5:]:  # Last 5 messages for context
+            
+            # Add system context about the last interaction
+            if len(st.session_state.messages) > 0:
+                last_msg = st.session_state.messages[-1]
+                if "EMP" in last_msg["content"]:
+                    # Extract the last mentioned employee details
+                    emp_match = re.search(r'(\w+ \w+).*?EMP\d{3}', last_msg["content"])
+                    if emp_match:
+                        chat_history.append(ChatMessage(
+                            role=MessageRole.SYSTEM,
+                            content=f"The last response mentioned {emp_match.group(1)}. Use their employee number to look up details."
+                        ))
+            
+            # Add recent message history
+            for msg in st.session_state.messages[-5:]:
                 role = MessageRole.USER if msg["role"] == "user" else MessageRole.ASSISTANT
                 chat_history.append(ChatMessage(
                     role=role,
                     content=msg["content"]
                 ))
-                if "context" in msg:
-                    chat_history.append(ChatMessage(
-                        role=MessageRole.SYSTEM,
-                        content=f"Context: {msg['context']}"
-                    ))
             
             # Get response using fresh agent
             response = current_agent.chat(prompt, chat_history=chat_history)
+            
+            # Update last employee number if response mentions one
+            if "EMP" in response.response:
+                emp_match = re.search(r'EMP\d{3}', response.response)
+                if emp_match:
+                    st.session_state.last_employee_number = emp_match.group(0)
             
             # Format and display response
             formatted_response = format_agent_response(response.response)
             message_placeholder.markdown(formatted_response)
             
-            # Store response
+            # Store response with context
             st.session_state.messages.append({
                 "role": "assistant", 
                 "content": formatted_response,
-                "context": response.response if "consultants" in prompt.lower() or "availability" in prompt.lower() else None
+                "context": response.response,
+                "last_employee": st.session_state.last_employee_number
             })
 
 # Streamlit UI

@@ -38,27 +38,24 @@ def create_sample_data(db):
     
     return len(employees)
 
-def fetch_employees(db, filters: Dict = None) -> List[Dict]:
-    """Fetch employees with optional filters"""
+def fetch_employees(db, filters=None):
+    """Fetch employees with filters"""
     try:
         # Start with base query
         query = db.collection('employees')
         
-        # Apply filters if provided
+        # Apply filters if any
         if filters:
-            if 'rank' in filters:
-                query = query.where('rank.official_name', '==', filters['rank'])
-            if 'location' in filters:
-                query = query.where('location', '==', filters['location'])
-            if 'name' in filters:
-                query = query.where('name', '==', filters['name'])
-        
+            for field, value in filters.items():
+                if field == 'employee_number':
+                    query = query.where('employee_number', '==', value)
+                elif field == 'location':
+                    query = query.where('location', '==', value)
+                elif field == 'rank':
+                    query = query.where('rank.official_name', '==', value)
+                    
         # Execute query
         docs = query.stream()
-        
-        # Debug print the query
-        print(f"Firebase Query: collection='employees' filters={filters}")
-        
         return [doc.to_dict() for doc in docs]
         
     except Exception as e:

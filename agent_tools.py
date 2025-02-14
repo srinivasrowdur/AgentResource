@@ -129,28 +129,37 @@ class ResourceQueryTools:
                     skills: Optional[List[str]] = None,
                     location: Optional[str] = None,
                     rank: Optional[str] = None,
-                    name: Optional[str] = None) -> str:
+                    name: Optional[str] = None,
+                    employee_number: Optional[str] = None) -> str:
         """Query people data efficiently"""
         try:
+            # Debug print
+            print(f"PeopleQuery called with: employee_number={employee_number}, location={location}, rank={rank}, name={name}, skills={skills}")
+            
             # Build server-side filters first
             filters = {}
             
+            if employee_number:
+                filters['employee_number'] = employee_number
+                print(f"Searching by employee number: {employee_number}")
+                
             if rank:
-                # Capitalize first letter of each word for rank
                 filters['rank'] = rank.title()
                 
             if location:
                 filters['location'] = location.title()
                 
             if name:
-                # Add name filter at database level
                 filters['name'] = name
                 
-            # Debug print
-            print(f"Query filters: {filters}")
-            
             # Get filtered data from server
+            print(f"Executing query with filters: {filters}")
             employees = fetch_employees(self.db, filters)
+            print(f"Query returned {len(employees)} results")
+            
+            # Apply skills filter in memory if needed
+            if skills:
+                employees = [emp for emp in employees if any(skill in emp["skills"] for skill in skills)]
             
             # Format results
             if not employees:
@@ -159,7 +168,6 @@ class ResourceQueryTools:
             table = "| Name | Location | Rank | Skills | Employee ID |\n"
             table += "|------|----------|------|---------|-------------|\n"
             
-            # Fix sorting to use the official_name from rank dictionary
             for emp in sorted(employees, key=lambda x: (x["rank"]["official_name"], x["name"])):
                 skills_str = ", ".join(emp["skills"])
                 table += f"| {emp['name']} | {emp['location']} | {emp['rank']['official_name']} | {skills_str} | {emp['employee_number']} |\n"
@@ -167,7 +175,7 @@ class ResourceQueryTools:
             return table
             
         except Exception as e:
-            print(f"Debug - Error details: {str(e)}")  # Add detailed error logging
+            print(f"Debug - Error in query_people: {str(e)}")
             return f"Error querying employees: {str(e)}"
 
     def query_availability(self, 
