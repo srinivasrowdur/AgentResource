@@ -8,9 +8,14 @@ import os
 from dotenv import load_dotenv
 import re
 from llama_index.core.llms import ChatMessage, MessageRole
+from openai import OpenAI as OpenAIClient
 
 # Load environment variables
 load_dotenv()
+
+# Clear Streamlit caches
+st.cache_resource.clear()
+st.cache_data.clear()
 
 # Check for required environment variables
 if not os.getenv('FIREBASE_CREDENTIALS_PATH'):
@@ -21,8 +26,15 @@ if not os.getenv('OPENAI_API_KEY'):
     st.error("OpenAI API key not set. Please set OPENAI_API_KEY in .env file")
     st.stop()
 
-# Initialize OpenAI
-Settings.llm = OpenAI(model="gpt-4o-mini", api_key=os.getenv("OPENAI_API_KEY"))
+# Initialize OpenAI without caching
+try:
+    # Create a client to check models
+    client = OpenAIClient(api_key=os.getenv("OPENAI_API_KEY"))
+    models = client.models.list()
+    print("Available models:", [model.id for model in models])
+except Exception as e:
+    st.error(f"Error initializing OpenAI: {str(e)}")
+    st.stop()
 
 # Initialize Firebase
 try:
@@ -32,14 +44,9 @@ except Exception as e:
     st.error("Please check your Firebase credentials file path")
     st.stop()
 
-# Initialize tools and agent
-@st.cache_resource
-def get_agent():
-    tools = ResourceQueryTools(db, db)
-    agent = create_agent(tools.get_tools(), Settings.llm)
-    return agent
-
-agent = get_agent()
+# Create agent without caching for testing
+tools = ResourceQueryTools(db, db)
+agent = create_agent(tools.get_tools(), Settings.llm)
 
 def format_agent_response(response: str) -> str:
     """Format agent response to preserve tables"""
@@ -74,8 +81,25 @@ def handle_query(prompt: str):
     # Create a placeholder for the assistant's response
     with st.chat_message("assistant"):
         message_placeholder = st.empty()
+        thinking_placeholder = st.empty()
         
         with st.spinner("Thinking..."):
+            # Force update OpenAI settings
+            api_key = os.getenv("OPENAI_API_KEY")
+            os.environ["OPENAI_API_KEY"] = api_key  # Update environment variable
+            
+            # Create fresh LLM instance and update global settings
+            llm = OpenAI(
+                model="gpt-4o-mini",
+                api_key=api_key,
+                temperature=0.1  # Remove additional_kwargs
+            )
+            Settings.llm = llm  # Update global settings
+            
+            # Create fresh tools and agent
+            tools = ResourceQueryTools(db, db)
+            current_agent = create_agent(tools.get_tools(), llm)
+            
             # Build chat history context
             chat_history = []
             for msg in st.session_state.messages[-5:]:  # Last 5 messages for context
@@ -84,14 +108,14 @@ def handle_query(prompt: str):
                     role=role,
                     content=msg["content"]
                 ))
-                if "context" in msg:  # Add any stored context
+                if "context" in msg:
                     chat_history.append(ChatMessage(
                         role=MessageRole.SYSTEM,
                         content=f"Context: {msg['context']}"
                     ))
             
-            # Get assistant response
-            response = agent.chat(prompt, chat_history=chat_history)
+            # Get response using fresh agent
+            response = current_agent.chat(prompt, chat_history=chat_history)
             
             # Format and display response
             formatted_response = format_agent_response(response.response)
