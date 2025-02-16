@@ -31,7 +31,7 @@ try:
     # Create a client to check models
     client = OpenAIClient(api_key=os.getenv("OPENAI_API_KEY"))
     
-    # Initialize LLM settings
+    # Initialize LLM settings with 40-mini model
     Settings.llm = OpenAI(
         model="gpt-4o-mini",
         api_key=os.getenv("OPENAI_API_KEY"),
@@ -78,78 +78,56 @@ if "last_employee_number" not in st.session_state:
     st.session_state.last_employee_number = None
 
 def handle_query(prompt: str):
-    """Handle query and update session state"""
+    # Legacy implementation using a single consolidated call via our agent.
     if not prompt:
-        return
-        
-    # Add user message
+         return
+
+    # Add the user message to session state.
     st.session_state.messages.append({"role": "user", "content": prompt})
-    
-    # Create a placeholder for the assistant's response
+
+    # Create a placeholder for the assistant's response.
     with st.chat_message("assistant"):
-        message_placeholder = st.empty()
-        thinking_placeholder = st.empty()
-        
-        with st.spinner("Thinking..."):
-            # Force update OpenAI settings
-            api_key = os.getenv("OPENAI_API_KEY")
-            os.environ["OPENAI_API_KEY"] = api_key
-            
-            # Create fresh LLM instance and update global settings
-            llm = OpenAI(
-                model="gpt-4o-mini",
-                api_key=api_key,
-                temperature=0.1
-            )
-            Settings.llm = llm
-            
-            # Create fresh tools and agent
-            tools = ResourceQueryTools(db, db)
-            current_agent = create_agent(tools.get_tools(), llm)
-            
-            # Build chat history context with last employee number
-            chat_history = []
-            
-            # Add system context about the last interaction
-            if len(st.session_state.messages) > 0:
-                last_msg = st.session_state.messages[-1]
-                if "EMP" in last_msg["content"]:
-                    # Extract the last mentioned employee details
-                    emp_match = re.search(r'(\w+ \w+).*?EMP\d{3}', last_msg["content"])
-                    if emp_match:
-                        chat_history.append(ChatMessage(
-                            role=MessageRole.SYSTEM,
-                            content=f"The last response mentioned {emp_match.group(1)}. Use their employee number to look up details."
-                        ))
-            
-            # Add recent message history
-            for msg in st.session_state.messages[-5:]:
-                role = MessageRole.USER if msg["role"] == "user" else MessageRole.ASSISTANT
-                chat_history.append(ChatMessage(
-                    role=role,
-                    content=msg["content"]
-                ))
-            
-            # Get response using fresh agent
-            response = current_agent.chat(prompt, chat_history=chat_history)
-            
-            # Update last employee number if response mentions one
-            if "EMP" in response.response:
-                emp_match = re.search(r'EMP\d{3}', response.response)
-                if emp_match:
-                    st.session_state.last_employee_number = emp_match.group(0)
-            
-            # Format and display response
-            formatted_response = format_agent_response(response.response)
-            message_placeholder.markdown(formatted_response)
-            
-            # Store response with context
-            st.session_state.messages.append({
-                "role": "assistant", 
-                "content": formatted_response,
-                "context": response.response,
-                "last_employee": st.session_state.last_employee_number
-            })
+         message_placeholder = st.empty()
+
+         with st.spinner("Thinking..."):
+              # Force update API key and create fresh LLM instance using 40-mini.
+              api_key = os.getenv("OPENAI_API_KEY")
+              os.environ["OPENAI_API_KEY"] = api_key
+              llm = OpenAI(
+                   model="gpt-4o-mini",
+                   api_key=api_key,
+                   temperature=0.1
+              )
+              Settings.llm = llm
+
+              # Build sanitized chat history from the last 5 messages.
+              sanitized_history = []
+              for msg in st.session_state.messages[-5:]:
+                   current_role = "user" if msg.get("role", "").lower() == "user" else "assistant"
+                   sanitized_history.append({"role": current_role, "content": msg["content"]})
+
+              # Build chat history (ChatMessage objects) using sanitized history.
+              from llama_index.core.llms import ChatMessage, MessageRole
+              chat_history = []
+              for msg in sanitized_history:
+                   role = MessageRole.USER if msg["role"] == "user" else MessageRole.ASSISTANT
+                   chat_history.append(ChatMessage(role=role, content=msg["content"]))
+
+              # Create tools and agent using the legacy approach.
+              tools = ResourceQueryTools(db, db)
+              current_agent = create_agent(tools.get_tools(), llm, chat_history=sanitized_history)
+              response = current_agent.chat(prompt, chat_history=chat_history)
+
+              formatted_response = format_agent_response(response.response)
+              message_placeholder.markdown(formatted_response)
+
+              st.session_state.messages.append({
+                   "role": "assistant",
+                   "content": formatted_response,
+                   "context": response.response
+              })
+
+              st.rerun()
 
 # Streamlit UI
 st.title("Resource Management Assistant")
@@ -168,6 +146,11 @@ if col2.button("📅 Who is available in week 2?"):
     st.rerun()
 
 st.markdown("---")
+
+# Clear Chat History button
+if st.button("Clear Chat History"):
+    st.session_state.messages = []
+    st.rerun()
 
 # Display chat history
 for message in st.session_state.messages:

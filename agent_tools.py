@@ -38,7 +38,20 @@ class ResourceQueryTools:
         self.db = db
         self.availability_db = availability_db
         
-        # Keep only the standard/canonical forms
+        # Define rank hierarchy (lowest to highest)
+        self.RANK_HIERARCHY = {
+            'Partner': 8,
+            'Associate Partner': 7,
+            'Consulting Director': 7,
+            'Managing Consultant': 6,
+            'Principal Consultant': 5,
+            'Senior Consultant': 4,
+            'Consultant': 3,
+            'Consultant Analyst': 2,
+            'Analyst': 1
+        }
+        
+        # Keep standard skills
         self.standard_skills = {
             "Frontend Developer",
             "Backend Developer",
@@ -51,6 +64,20 @@ class ResourceQueryTools:
             "Agile Coach",
             "Business Analyst"
         }
+
+    def is_rank_below(self, rank1: str, rank2: str) -> bool:
+        """Check if rank1 is below rank2"""
+        return self.RANK_HIERARCHY.get(rank1, 0) < self.RANK_HIERARCHY.get(rank2, 0)
+    
+    def is_rank_above(self, rank1: str, rank2: str) -> bool:
+        """Check if rank1 is above rank2"""
+        return self.RANK_HIERARCHY.get(rank1, 0) > self.RANK_HIERARCHY.get(rank2, 0)
+    
+    def is_fully_available(self, pattern: str, status: str) -> bool:
+        """Check if someone is truly fully available"""
+        pattern = pattern.strip() if pattern else ""
+        status = status.strip() if status else ""
+        return pattern == "Generally available" and status == "Available"
 
     def translate_skill_query(self, skill_query: str) -> Optional[str]:
         """Use LLM to translate skill query to standard form"""
@@ -195,24 +222,113 @@ class ResourceQueryTools:
                          skills: Optional[List[str]] = None,
                          location: Optional[str] = None,
                          rank: Optional[str] = None,
+                         rank_below: Optional[str] = None,
+                         rank_above: Optional[str] = None,
+                         employee_numbers: Optional[List[str]] = None,
                          weeks: Optional[List[int]] = None) -> str:
         """Query people with their availability in one go"""
         try:
             # First get matching people
-            people_results = self.query_people(skills=skills, location=location, rank=rank)
+            if employee_numbers:
+                # If we have specific employee numbers, use those
+                filters = {'employee_numbers': employee_numbers}
+            else:
+                # Otherwise use other filters
+                filters = {}
+                if skills:
+                    filters['skills'] = skills
+                if location:
+                    filters['location'] = location
+                if rank:
+                    filters['rank'] = rank
+                
+            people_results = self.query_people(**filters)
             if "No employees found" in people_results:
                 return people_results
             
-            # Extract employee numbers
+            # Extract employee numbers and details
             emp_numbers = []
+            emp_details = {}
             for line in people_results.split('\n'):
                 if '|' in line and 'EMP' in line:
-                    emp_numbers.append(line.split('|')[-2].strip())
+                    parts = [p.strip() for p in line.split('|')]
+                    emp_id = parts[-2]
+                    emp_rank = parts[3]
+                    
+                    # Apply rank filters
+                    if rank_below and not self.is_rank_below(emp_rank, rank_below):
+                        continue
+                    if rank_above and not self.is_rank_above(emp_rank, rank_above):
+                        continue
+                        
+                    emp_details[emp_id] = {
+                        'name': parts[1],
+                        'location': parts[2],
+                        'rank': emp_rank,
+                        'skills': parts[4]
+                    }
+                    emp_numbers.append(emp_id)
+            
+            if not emp_numbers:
+                return "No employees found matching the rank criteria."
             
             # Get availability in one query
             availability = self.query_availability(emp_numbers, weeks)
             
-            return f"Found matching employees:\n{people_results}\n\nAvailability:\n{availability}"
+            # Filter for fully available people
+            fully_available = []
+            availability_details = {}
+            
+            for line in availability.split('\n'):
+                if '|' in line:
+                    parts = [p.strip() for p in line.split('|')]
+                    if len(parts) < 4:  # Skip header/separator lines
+                        continue
+                        
+                    name = parts[1]
+                    pattern = parts[2]
+                    status = parts[3]
+                    
+                    # Store availability details for all matching people
+                    emp_id = next((id for id, details in emp_details.items() 
+                                 if details['name'] == name), None)
+                    if emp_id:
+                        availability_details[emp_id] = {
+                            'pattern': pattern,
+                            'status': status
+                        }
+                        
+                        if self.is_fully_available(pattern, status):
+                            fully_available.append(emp_details[emp_id])
+            
+            # Format the response
+            response = "Found matching employees:\n"
+            response += "\n".join([line for line in people_results.split('\n') 
+                                 if any(emp['name'] in line for emp in emp_details.values())])
+            
+            response += "\n\nAvailability Status:\n"
+            for emp_id, emp in emp_details.items():
+                avail = availability_details.get(emp_id, {})
+                pattern = avail.get('pattern', 'Unknown')
+                status = avail.get('status', 'Unknown')
+                is_available = self.is_fully_available(pattern, status)
+                
+                response += f"\n{'✓' if is_available else '❌'} {emp['name']} ({emp['rank']}):\n"
+                response += f"  - Pattern: {pattern}\n"
+                response += f"  - Status: {status}\n"
+            
+            response += "\n"
+            if fully_available:
+                response += "FULLY AVAILABLE PEOPLE:\n"
+                for emp in sorted(fully_available, 
+                                key=lambda x: (self.RANK_HIERARCHY.get(x['rank'], 0), x['name']), 
+                                reverse=True):
+                    response += f"✓ {emp['name']} ({emp['rank']}, {emp['location']})\n"
+            else:
+                response += "❌ No fully available people found.\n"
+            
+            return response
+            
         except Exception as e:
             return f"Error querying available people: {str(e)}"
 
@@ -223,26 +339,24 @@ class ResourceQueryTools:
                 fn=self.query_available_people,
                 name="QueryAvailablePeople",
                 description="""
-                Query people and their availability in one go.
-                Use this for questions about who is available.
+                ONLY use this for questions about employee availability and scheduling.
+                Do NOT use for general questions or explanations.
                 
                 Parameters:
                 - skills: List of skills to filter by (e.g., ['Frontend Developer'])
-                - location (optional): Office location
-                - rank (optional): Job title
-                - weeks: List of week numbers to check (e.g., [1] for week 1)
-                
-                Example: {'skills': ['Frontend Developer'], 'weeks': [1]}
+                - weeks: List of week numbers to check
+                - rank_below/rank_above: For rank filtering
+                - employee_numbers: For specific people
                 """
             ),
             FunctionTool.from_defaults(
                 fn=self.query_people,
                 name="PeopleQuery",
-                description="Use only for queries that don't involve availability"
+                description="ONLY use for finding specific employees. Do NOT use for general explanations."
             ),
             FunctionTool.from_defaults(
                 fn=self.query_availability,
                 name="AvailabilityQuery",
-                description="Use only when you already have employee numbers"
+                description="ONLY use for checking specific employee availability."
             )
         ]
