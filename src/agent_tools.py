@@ -8,6 +8,7 @@ from firebase_utils import (
     fetch_availability_batch,
 )
 from datetime import datetime, timedelta
+from src.query_tools.base import BaseResourceQueryTools
 
 def preprocess_query(query: str) -> Dict[str, any]:
     """Preprocess and validate the query"""
@@ -50,44 +51,146 @@ RANK_HIERARCHY = {
     'Analyst': 8
 }
 
-class ResourceQueryTools:
-    def __init__(self, db, availability_db):
+class ResourceQueryTools(BaseResourceQueryTools):
+    """Production version with Firebase integration"""
+    
+    def __init__(self, db, availability_db, llm_client):
+        super().__init__()
         self.db = db
         self.availability_db = availability_db
+        self.llm = llm_client
+
+    def construct_query(self, query_str: str) -> dict:
+        """Use LLM to parse natural language query into structured format"""
+        prompt = """You are a JSON query generator. Your task is to convert natural language queries into JSON objects.
         
-        # Keep standard skills
-        self.standard_skills = {
-            "Frontend Developer",
-            "Backend Developer",
-            "Full Stack Developer",
-            "AWS Engineer",
-            "GCP Engineer",
-            "Cloud Engineer",
-            "Architect",
-            "Product Manager",
-            "Agile Coach",
-            "Business Analyst"
-        }
+        Rules:
+        1. Return ONLY a valid JSON object, no other text
+        2. Use exact rank names from the hierarchy
+        3. Use exact location names from the list
+        4. Do not add any extra fields
+        
+        RANK HIERARCHY (from highest to lowest):
+        1. Partner
+        2. Associate Partner/Consulting Director
+        3. Managing Consultant (MC)
+        4. Principal Consultant
+        5. Senior Consultant
+        6. Consultant
+        7. Consultant Analyst
+        8. Analyst
+        
+        LOCATIONS:
+        - UK: London, Manchester, Bristol, Belfast
+        - Scandinavia: Copenhagen, Stockholm, Oslo
+        
+        Examples:
+        Query: "consultants in London"
+        {"rank":"Consultant","location":"London"}
+        
+        Query: "all consultants below MC"
+        {"ranks":["Principal Consultant","Senior Consultant","Consultant","Consultant Analyst","Analyst"]}
+        
+        Query: "Frontend Developers in Oslo"
+        {"location":"Oslo","skills":["Frontend Developer"]}
+        
+        Query: {query}
+        """
+        
+        # Get structured response from LLM
+        response = self.llm.complete(prompt.format(query=query_str))
+        
+        # Clean up response - remove any non-JSON text
+        try:
+            # Find the first { and last }
+            start = response.find('{')
+            end = response.rfind('}') + 1
+            if start >= 0 and end > start:
+                json_str = response[start:end]
+                print(f"Attempting to parse JSON: {json_str}")  # Debug print
+                structured_query = json.loads(json_str)
+                return self.validate_query(structured_query)
+        except (json.JSONDecodeError, ValueError) as e:
+            print(f"Failed to parse LLM response: {response}")
+            return {}
+
+    def validate_query(self, query: dict) -> dict:
+        """Validate and clean up the LLM response"""
+        valid_query = {}
+        
+        # Location validation
+        if 'location' in query and isinstance(query['location'], str):
+            if query['location'] in self.locations:
+                valid_query['location'] = query['location']
+        
+        # Rank validation
+        if 'rank' in query and isinstance(query['rank'], str):
+            if query['rank'] in self.RANK_HIERARCHY:
+                valid_query['rank'] = query['rank']
+        
+        # Ranks validation
+        if 'ranks' in query and isinstance(query['ranks'], list):
+            valid_ranks = [r for r in query['ranks'] if r in self.RANK_HIERARCHY]
+            if valid_ranks:
+                valid_query['ranks'] = valid_ranks
+        
+        # Skills validation
+        if 'skills' in query and isinstance(query['skills'], list):
+            valid_skills = [s for s in query['skills'] if s in self.standard_skills]
+            if valid_skills:
+                valid_query['skills'] = valid_skills
+        
+        return valid_query
+
+    def query_people(self, query_str: str) -> str:
+        """Query people based on filters"""
+        try:
+            # If query_str is a dict, extract the actual query string
+            if isinstance(query_str, dict):
+                query_str = query_str.get('query_str', '')
+
+            # Construct and validate query
+            query = self.construct_query(query_str)
+            if not query:
+                return "Could not understand the query. Please try again."
+            
+            # Execute query with Firebase
+            results = fetch_employees(self.db, query)
+            
+            if not results:
+                return f"No employees found matching the criteria: {query}"
+            
+            # Format results as markdown table
+            table = "| Name | Location | Rank | Skills | Employee ID |\n"
+            table += "|------|----------|------|---------|-------------|\n"
+            
+            for emp in results:
+                skills = ", ".join(emp.get('skills', []))
+                table += f"| {emp['name']} | {emp['location']} | {emp['rank']} | {skills} | {emp['employee_number']} |\n"
+            
+            return table
+            
+        except Exception as e:
+            return f"Error querying employees: {str(e)}"
 
     def get_ranks_below(self, rank: str) -> List[str]:
         """Get all ranks below the specified rank"""
         if rank.lower() == 'mc':
             rank = 'Managing Consultant'
-        target_level = RANK_HIERARCHY.get(rank)
+        target_level = self.RANK_HIERARCHY.get(rank)
         if not target_level:
             return []
-        # Return ranks strictly below the target level (higher number = lower rank)
-        return sorted([r for r, level in RANK_HIERARCHY.items() 
+        return sorted([r for r, level in self.RANK_HIERARCHY.items() 
                       if level > target_level],
-                     key=lambda x: RANK_HIERARCHY[x])  # Sort by hierarchy
+                     key=lambda x: self.RANK_HIERARCHY[x])
 
     def is_rank_below(self, rank1: str, rank2: str) -> bool:
         """Check if rank1 is below rank2"""
-        return RANK_HIERARCHY.get(rank1, 0) < RANK_HIERARCHY.get(rank2, 0)
+        return self.RANK_HIERARCHY.get(rank1, 0) < self.RANK_HIERARCHY.get(rank2, 0)
     
     def is_rank_above(self, rank1: str, rank2: str) -> bool:
         """Check if rank1 is above rank2"""
-        return RANK_HIERARCHY.get(rank1, 0) > RANK_HIERARCHY.get(rank2, 0)
+        return self.RANK_HIERARCHY.get(rank1, 0) > self.RANK_HIERARCHY.get(rank2, 0)
     
     def is_fully_available(self, pattern: str, status: str) -> bool:
         """Check if someone is truly fully available"""
@@ -139,124 +242,6 @@ class ResourceQueryTools:
         if employees and len(employees) > 0:
             return employees[0].get('skills', [])
         return []
-
-    def query_people(self, query_str: str = None) -> str:
-        """Query people based on filters"""
-        try:
-            query = {}
-            if isinstance(query_str, str):
-                query_lower = query_str.lower()
-                
-                # Helper to check query context
-                is_hierarchy_query = any(word in query_lower for word in ["below", "above", "under"])
-                is_generic_consultant_query = (
-                    "consultant" in query_lower and 
-                    (is_hierarchy_query or "all" in query_lower or "resources" in query_lower)
-                )
-                
-                # Handle rank filtering with context awareness
-                if is_generic_consultant_query:
-                    # When used generically, get all consulting ranks based on context
-                    if "mc" in query_lower or "managing" in query_lower:
-                        query["ranks"] = self.get_ranks_below("Managing Consultant")
-                    elif "principal" in query_lower:
-                        query["ranks"] = self.get_ranks_below("Principal Consultant")
-                    elif "partner" in query_lower:
-                        query["ranks"] = self.get_ranks_below("Partner")
-                    else:
-                        # If no specific level mentioned, include all consulting ranks
-                        query["ranks"] = [r for r in RANK_HIERARCHY.keys() 
-                                        if "Consultant" in r and r != "Consulting Director"]
-                elif "consultant" in query_lower:
-                    # When used specifically (e.g., "Consultants in London")
-                    if not any(mod in query_lower for mod in ["senior", "principal", "managing", "analyst"]):
-                        query["rank"] = "Consultant"
-                elif "below" in query_lower:
-                    # Handle other "below" queries for non-consultant ranks
-                    if "mc" in query_lower:
-                        query["ranks"] = self.get_ranks_below("Managing Consultant")
-                    else:
-                        for rank in RANK_HIERARCHY.keys():
-                            if rank.lower().replace(' ', '') in query_lower:
-                                query["ranks"] = self.get_ranks_below(rank)
-                                break
-                elif "partner" in query_lower and "associate" not in query_lower:
-                    query["rank"] = "Partner"
-                
-                # Handle location
-                if "london" in query_lower:
-                    query["location"] = "London"
-                elif "manchester" in query_lower:
-                    query["location"] = "Manchester"
-                elif "bristol" in query_lower:
-                    query["location"] = "Bristol"
-                elif "belfast" in query_lower:
-                    query["location"] = "Belfast"
-                
-                # Handle skill matching
-                if "similar to" in query_lower or "like" in query_lower:
-                    # Extract employee name after "similar to" or "like"
-                    # Then look up their skills and add to query
-                    employee_name = self.extract_employee_name(query_lower)
-                    if employee_name:
-                        employee_skills = self.get_employee_skills(self.db, employee_name)
-                        if employee_skills:
-                            query["skills"] = employee_skills
-            
-            elif isinstance(query_str, dict):
-                query = query_str
-
-            print(f"Original query: skills={query.get('skills')}, location={query.get('location')}, rank={query.get('rank')}")
-            
-            # Build filters dictionary
-            filters = {}
-            
-            # Handle multiple ranks
-            if 'ranks' in query:
-                filters['ranks'] = query['ranks']
-            elif 'rank' in query:
-                filters['rank'] = query['rank']
-
-            if 'location' in query and query['location']:
-                filters['location'] = query['location']
-
-            # Handle skills translation
-            if 'skills' in query and query['skills']:
-                if not isinstance(query['skills'], list):
-                    query['skills'] = [query['skills']]
-                
-                valid_skills = []
-                for skill in query['skills']:
-                    if skill in self.standard_skills:
-                        valid_skills.append(skill)
-                    else:
-                        print(f"Warning: Could not translate skill '{skill}'")
-                
-                if not valid_skills:
-                    return "I couldn't understand the requested skill. Please use terms like 'Frontend Developer', 'Backend Developer', 'AWS Engineer', etc."
-                
-                filters['skills'] = valid_skills
-
-            print(f"Executing query with filters: {filters}")
-            
-            # Execute query
-            results = fetch_employees(self.db, filters)
-            
-            if not results:
-                return "No matching employees found."
-            
-            # Format results as a markdown table
-            table = "| Name | Location | Rank | Skills | Employee ID |\n"
-            table += "|------|----------|------|---------|-------------|\n"
-            
-            for emp in results:
-                skills_str = ", ".join(emp.get('skills', []))
-                table += f"| {emp['name']} | {emp['location']} | {emp['rank']} | {skills_str} | {emp['employee_number']} |\n"
-            
-            return table
-
-        except Exception as e:
-            return f"Error querying people: {str(e)}"
 
     def query_availability(self, employee_numbers: Union[str, List[str]], weeks: Optional[List[int]] = None) -> str:
         """First get employees matching criteria, then check their availability"""
@@ -404,7 +389,7 @@ class ResourceQueryTools:
             if fully_available:
                 response += "FULLY AVAILABLE PEOPLE:\n"
                 for emp in sorted(fully_available, 
-                                key=lambda x: (RANK_HIERARCHY.get(x['rank'], 0), x['name']), 
+                                key=lambda x: (self.RANK_HIERARCHY.get(x['rank'], 0), x['name']), 
                                 reverse=True):
                     response += f"✓ {emp['name']} ({emp['rank']}, {emp['location']})\n"
             else:
@@ -429,7 +414,7 @@ class ResourceQueryTools:
                 ranks = self.get_ranks_below("Managing Consultant")
                 return f"Ranks below Managing Consultant (MC):\n- " + "\n- ".join(ranks)
             # Handle other ranks
-            for rank in RANK_HIERARCHY.keys():
+            for rank in self.RANK_HIERARCHY.keys():
                 if rank.lower().replace(' ', '') in query_lower:
                     ranks = self.get_ranks_below(rank)
                     return f"Ranks below {rank}:\n- " + "\n- ".join(ranks)
