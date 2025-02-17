@@ -3,6 +3,7 @@ from src.query_tools.base import BaseResourceQueryTools
 import pytest
 from src.agent_tools import ResourceQueryTools
 from firebase_utils import initialize_firebase
+import json
 
 # Corrected rank hierarchy (MC above PC)
 RANK_HIERARCHY = {
@@ -105,11 +106,97 @@ class MockResourceQueryTools:
             "Project Manager",
             "Digital Consultant"
         ]
+        # Expanded mock database for testing
+        self.mock_employees = [
+            {
+                "name": "John Doe",
+                "location": "London",
+                "rank": "Consultant",
+                "skills": ["Frontend Developer"],
+                "employee_number": "E001"
+            },
+            {
+                "name": "Jane Smith",
+                "location": "London",
+                "rank": "Senior Consultant",
+                "skills": ["Backend Developer"],
+                "employee_number": "E002"
+            },
+            {
+                "name": "Alice Johnson",
+                "location": "Manchester",
+                "rank": "Consultant",
+                "skills": ["Full Stack Developer"],
+                "employee_number": "E003"
+            },
+            {
+                "name": "Bob Wilson",
+                "location": "Copenhagen",
+                "rank": "Principal Consultant",
+                "skills": ["Cloud Engineer"],
+                "employee_number": "E004"
+            },
+            {
+                "name": "Carol Brown",
+                "location": "Stockholm",
+                "rank": "Managing Consultant",
+                "skills": ["Solution Architect"],
+                "employee_number": "E005"
+            },
+            {
+                "name": "David Miller",
+                "location": "Bristol",
+                "rank": "Senior Consultant",
+                "skills": ["DevOps Engineer"],
+                "employee_number": "E006"
+            },
+            {
+                "name": "Emma Davis",
+                "location": "Belfast",
+                "rank": "Consultant Analyst",
+                "skills": ["Data Engineer"],
+                "employee_number": "E007"
+            }
+        ]
 
-    def query_people(self, query_str: str) -> str:
-        """Mock query implementation"""
-        filters = self.construct_query(query_str)
-        return f"Executing query with filters: {filters}"
+    def query_people(self, query: str) -> str:
+        """Mock query implementation that returns formatted table"""
+        try:
+            structured_query = json.loads(query) if isinstance(query, str) else query
+            
+            # Mock database query
+            results = [emp for emp in self.mock_employees if self._matches_query(emp, structured_query)]
+            
+            if not results:
+                return f"No employees found matching: {structured_query}"
+            
+            return self._format_results_table(results)
+        except Exception as e:
+            return f"Error executing query: {str(e)}"
+
+    def _matches_query(self, emp: dict, query: dict) -> bool:
+        """Helper to check if employee matches query"""
+        for key, value in query.items():
+            if key == 'ranks' and emp['rank'] not in value:
+                return False
+            elif key == 'rank' and emp['rank'] != value:
+                return False
+            elif key == 'location' and emp['location'] != value:
+                return False
+            elif key == 'skills' and not any(skill in emp['skills'] for skill in value):
+                return False
+        return True
+
+    def _format_results_table(self, results: list) -> str:
+        """Helper to format results as table"""
+        table = "| Name | Location | Rank | Skills | Employee ID |\n"
+        table += "|------|----------|------|---------|-------------|\n"
+        
+        for emp in results:
+            skills = ", ".join(emp['skills'])
+            table += f"| {emp['name']} | {emp['location']} | {emp['rank']} | {skills} | {emp['employee_number']} |\n"
+        
+        return table
 
     def get_ranks_below(self, rank: str) -> List[str]:
         """Get all ranks below the specified rank"""
@@ -203,6 +290,11 @@ class MockResourceQueryTools:
         
         return query
 
+    def translate_query(self, query_str: str) -> str:
+        """Mock translation implementation"""
+        structured_query = self.construct_query(query_str)
+        return json.dumps(structured_query, indent=2)
+
 # Updated test cases
 @pytest.mark.parametrize("query,expected", [
     (
@@ -237,8 +329,20 @@ def test_query_construction(query, expected):
 def test_location_queries(query, expected_location):
     """Test location queries including Scandinavian cities"""
     tools = MockResourceQueryTools()
-    result = tools.query_people(query)
-    assert f"'location': '{expected_location}'" in result
+    
+    # First translate the query to JSON
+    json_query = tools.translate_query(query)
+    
+    # Then use the JSON for people query
+    result = tools.query_people(json_query)
+    
+    # Success case: we got results
+    if "| Name | Location | Rank |" in result:
+        assert expected_location in result
+    # No results case: verify the query was correct
+    else:
+        structured_query = json.loads(json_query)
+        assert structured_query.get('location') == expected_location
 
 @pytest.mark.parametrize("query,expected_ranks", [
     (
@@ -258,3 +362,40 @@ def test_hierarchy_queries(query, expected_ranks):
     tools = MockResourceQueryTools()
     result = tools.construct_query(query)
     assert result.get('ranks') == expected_ranks 
+
+def test_query_translation():
+    """Test the query translation functionality"""
+    tools = MockResourceQueryTools()
+    
+    test_cases = [
+        (
+            "consultants in London",
+            {"rank": "Consultant", "location": "London"}
+        ),
+        (
+            "all consultants",
+            {"ranks": ["Principal Consultant", "Managing Consultant", "Senior Consultant",
+                      "Consultant", "Consultant Analyst"]}
+        ),
+        (
+            "Frontend Developers in Oslo",
+            {"skills": ["Frontend Developer"], "location": "Oslo"}
+        )
+    ]
+    
+    for query, expected in test_cases:
+        result = json.loads(tools.translate_query(query))
+        assert result == expected
+
+def test_query_flow():
+    """Test the complete query flow"""
+    tools = MockResourceQueryTools()
+    
+    # First translate the query
+    query = "consultants in London"
+    json_query = tools.translate_query(query)
+    assert json_query  # Ensure we got a response
+    
+    # Then use the JSON for people query
+    results = tools.query_people(json_query)
+    assert "| Name | Location | Rank |" in results  # Check table format 

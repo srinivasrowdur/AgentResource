@@ -61,57 +61,41 @@ class ResourceQueryTools(BaseResourceQueryTools):
         self.llm = llm_client
 
     def construct_query(self, query_str: str) -> dict:
-        """Use LLM to parse natural language query into structured format"""
-        prompt = """You are a JSON query generator. Your task is to convert natural language queries into JSON objects.
+        """Convert natural language to structured query"""
+        prompt = """Convert this query to a valid JSON query object.
+        Return ONLY the JSON object.
+
+        IMPORTANT RULES FOR CONSULTANT QUERIES:
+        1. "consultants in [location]" -> {"rank": "Consultant", "location": "[location]"}
+        2. "all consultants" -> {"ranks": ["Principal Consultant", "Managing Consultant", "Senior Consultant", "Consultant", "Consultant Analyst"]}
+        3. "all consultants below MC" -> {"ranks": ["Principal Consultant", "Senior Consultant", "Consultant", "Consultant Analyst", "Analyst"]}
+        4. "consulting resources" -> same as "all consultants"
+
+        Example queries and responses:
+        "consultants in London" -> {"rank":"Consultant","location":"London"}
+        "all consultants" -> {"ranks":["Principal Consultant","Managing Consultant","Senior Consultant","Consultant","Consultant Analyst"]}
+        "Frontend Developers in Oslo" -> {"skills":["Frontend Developer"],"location":"Oslo"}
         
-        Rules:
-        1. Return ONLY a valid JSON object, no other text
-        2. Use exact rank names from the hierarchy
-        3. Use exact location names from the list
-        4. Do not add any extra fields
+        Query: {query}"""
         
-        RANK HIERARCHY (from highest to lowest):
-        1. Partner
-        2. Associate Partner/Consulting Director
-        3. Managing Consultant (MC)
-        4. Principal Consultant
-        5. Senior Consultant
-        6. Consultant
-        7. Consultant Analyst
-        8. Analyst
-        
-        LOCATIONS:
-        - UK: London, Manchester, Bristol, Belfast
-        - Scandinavia: Copenhagen, Stockholm, Oslo
-        
-        Examples:
-        Query: "consultants in London"
-        {"rank":"Consultant","location":"London"}
-        
-        Query: "all consultants below MC"
-        {"ranks":["Principal Consultant","Senior Consultant","Consultant","Consultant Analyst","Analyst"]}
-        
-        Query: "Frontend Developers in Oslo"
-        {"location":"Oslo","skills":["Frontend Developer"]}
-        
-        Query: {query}
-        """
-        
-        # Get structured response from LLM
-        response = self.llm.complete(prompt.format(query=query_str))
-        
-        # Clean up response - remove any non-JSON text
         try:
-            # Find the first { and last }
-            start = response.find('{')
-            end = response.rfind('}') + 1
-            if start >= 0 and end > start:
-                json_str = response[start:end]
-                print(f"Attempting to parse JSON: {json_str}")  # Debug print
-                structured_query = json.loads(json_str)
-                return self.validate_query(structured_query)
-        except (json.JSONDecodeError, ValueError) as e:
-            print(f"Failed to parse LLM response: {response}")
+            response = self.llm.complete(
+                prompt.format(query=query_str),
+                temperature=0.1
+            ).text
+            
+            # Clean and parse JSON
+            response = response.strip()
+            if not response.startswith('{'):
+                start = response.find('{')
+                end = response.rfind('}') + 1
+                if start >= 0 and end > start:
+                    response = response[start:end]
+            
+            structured_query = json.loads(response)
+            return self.validate_query(structured_query)
+            
+        except Exception as e:
             return {}
 
     def validate_query(self, query: dict) -> dict:
@@ -142,25 +126,24 @@ class ResourceQueryTools(BaseResourceQueryTools):
         
         return valid_query
 
-    def query_people(self, query_str: str) -> str:
-        """Query people based on filters"""
+    def query_people(self, query: str) -> str:
+        """Query people based on JSON query"""
         try:
-            # If query_str is a dict, extract the actual query string
-            if isinstance(query_str, dict):
-                query_str = query_str.get('query_str', '')
+            # Handle string input (from translator)
+            if isinstance(query, str):
+                try:
+                    structured_query = json.loads(query)
+                except json.JSONDecodeError:
+                    return "Error: Invalid JSON query format"
+            else:
+                structured_query = query
 
-            # Construct and validate query
-            query = self.construct_query(query_str)
-            if not query:
-                return "Could not understand the query. Please try again."
-            
-            # Execute query with Firebase
-            results = fetch_employees(self.db, query)
-            
+            # Execute query
+            results = fetch_employees(self.db, structured_query)
             if not results:
-                return f"No employees found matching the criteria: {query}"
+                return f"No employees found matching: {structured_query}"
             
-            # Format results as markdown table
+            # Format results
             table = "| Name | Location | Rank | Skills | Employee ID |\n"
             table += "|------|----------|------|---------|-------------|\n"
             
@@ -169,9 +152,8 @@ class ResourceQueryTools(BaseResourceQueryTools):
                 table += f"| {emp['name']} | {emp['location']} | {emp['rank']} | {skills} | {emp['employee_number']} |\n"
             
             return table
-            
         except Exception as e:
-            return f"Error querying employees: {str(e)}"
+            return f"Error executing query: {str(e)}"
 
     def get_ranks_below(self, rank: str) -> List[str]:
         """Get all ranks below the specified rank"""
@@ -421,58 +403,89 @@ class ResourceQueryTools(BaseResourceQueryTools):
         
         return "Please specify a rank query like 'below MC' or 'below Partner'"
 
-    def get_tools(self) -> List[FunctionTool]:
-        """Get all tools"""
+    def get_tools(self):
+        """Get the tools for the agent"""
         return [
+            FunctionTool.from_defaults(
+                fn=self.translate_query,
+                name="QueryTranslator",
+                description="""
+                Translates natural language queries into structured JSON format.
+                ALWAYS use this tool first to translate user queries.
+                
+                EXAMPLE INPUTS AND OUTPUTS:
+                1. "consultants in London" -> 
+                   {"rank":"Consultant","location":"London"}
+                
+                2. "all consultants" -> 
+                   {"ranks":["Principal Consultant","Managing Consultant","Senior Consultant","Consultant","Consultant Analyst"]}
+                
+                3. "Frontend Developers in Oslo" -> 
+                   {"skills":["Frontend Developer"],"location":"Oslo"}
+                
+                4. "all consultants below MC" -> 
+                   {"ranks":["Principal Consultant","Senior Consultant","Consultant","Consultant Analyst","Analyst"]}
+                
+                Use this BEFORE making any PeopleQuery calls.
+                """
+            ),
             FunctionTool.from_defaults(
                 fn=self.query_people,
                 name="PeopleQuery",
-                description="""Query people based on location, rank, and skills.
-                   IMPORTANT: The word 'consultant' is interpreted based on context:
-                    
-                    1. Generic/Collective Usage (returns multiple ranks):
-                       - "all consultants below MC"
-                       - "consulting resources in London"
-                       - "consultants below Principal"
-                    
-                    2. Specific Rank Usage (returns only Rank 6):
-                       - "Consultants in London"
-                       - "available Consultants"
-                       - "Frontend Developer Consultants"
-                    
-                    RANKS (from highest to lowest):
-                    1. Partner
-                    2. Associate Partner/Consulting Director
-                    3. Principal Consultant
-                    4. Managing Consultant (MC)
-                    5. Senior Consultant
-                    6. Consultant
-                    7. Consultant Analyst
-                    8. Analyst
-                    
-                    Examples:
-                    - 'all consultants below MC'     # Returns ALL consulting ranks below MC
-                    - 'Consultants in London'        # Returns ONLY rank 6 in London
-                    - 'consulting resources in UK'    # Returns ALL consulting ranks
-                    - 'partners in Manchester'        # Returns ONLY rank 1"""
-            ),
-            FunctionTool.from_defaults(
-                fn=self.query_availability,
-                name="AvailabilityQuery",
-                description="""Check availability for specific employees.
-                   Input should be a list of employee IDs and week numbers."""
+                description="""
+                Queries employees using a structured JSON query.
+                ONLY use this after getting JSON from QueryTranslator.
+                
+                Input must be a valid JSON query with these possible fields:
+                - rank: single rank name
+                - ranks: array of rank names
+                - location: location name
+                - skills: array of skill names
+                """
             ),
             FunctionTool.from_defaults(
                 fn=self.get_ranks_tool,
                 name="RankQuery",
-                description="""Get information about ranks. Examples:
-                   IMPORTANT: We have a strict rank hierarchy:
-                   Partner > Associate Partner = Consulting Director > Principal Consultant > 
-                   Managing Consultant (MC) > Senior Consultant > Consultant > 
-                   Consultant Analyst > Analyst
-                   
-                   Input: 'below MC' -> Returns all ranks below Managing Consultant
-                   Input: 'below Partner' -> Returns all ranks below Partner
-                   Note: 'MC' is shorthand for 'Managing Consultant'"""
+                description="""
+                Get information about rank hierarchy.
+                
+                WHEN TO USE:
+                - When you need to understand which ranks are below another rank
+                - When you need to verify the rank hierarchy
+                - Before making complex rank-based queries
+                
+                RANK HIERARCHY (highest to lowest):
+                Partner > Associate Partner = Consulting Director > Managing Consultant (MC) >
+                Principal Consultant > Senior Consultant > Consultant > Consultant Analyst > Analyst
+                
+                EXAMPLE QUERIES:
+                - "below MC" -> returns all ranks below Managing Consultant
+                - "below Partner" -> returns all ranks below Partner
+                
+                Use this tool to understand rank relationships before making PeopleQuery calls.
+                """
+            ),
+            FunctionTool.from_defaults(
+                fn=self.query_availability,
+                name="AvailabilityQuery",
+                description="""
+                Check availability for specific employees.
+                
+                WHEN TO USE:
+                - After finding employees with PeopleQuery
+                - When you need to check availability for specific weeks
+                
+                Input should be a list of employee IDs and week numbers.
+                """
             )
         ]
+
+    def translate_query(self, query_str: str) -> str:
+        """Translate natural language query to JSON structure"""
+        try:
+            structured_query = self.construct_query(query_str)
+            if not structured_query:
+                return "Error: Could not translate query. Please try again."
+            return json.dumps(structured_query, indent=2)
+        except Exception as e:
+            return f"Error translating query: {str(e)}"

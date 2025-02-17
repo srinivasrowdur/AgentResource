@@ -3,6 +3,7 @@ from typing import Dict, List, Optional
 from tests.test_agent_tools import MockResourceQueryTools, RANK_HIERARCHY, TEST_CASES
 from src.query_tools.base import BaseResourceQueryTools
 from unittest.mock import Mock
+import json
 
 # Add this at the top of the file
 pytestmark = pytest.mark.filterwarnings("ignore::pytest.PytestCollectionWarning")
@@ -202,8 +203,19 @@ class TestLocationQueries:
         ("employees in Belfast", "Belfast"),
     ])
     def test_location_queries(self, query_tools, query, expected_location):
-        result = query_tools.query_people(query)
-        assert f"'location': '{expected_location}'" in result
+        # First translate the query to JSON
+        json_query = query_tools.translate_query(query)
+        
+        # Then use the JSON for people query
+        result = query_tools.query_people(json_query)
+        
+        # Success case: we got results
+        if "| Name | Location | Rank |" in result:
+            assert expected_location in result
+        # No results case: verify the query was correct
+        else:
+            structured_query = json.loads(json_query)
+            assert structured_query.get('location') == expected_location
 
 class TestEdgeCases:
     """Test edge cases and potential ambiguous queries"""

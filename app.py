@@ -79,12 +79,14 @@ def main():
             # Create a client to check models
             client = OpenAIClient(api_key=os.getenv("OPENAI_API_KEY"))
             
-            # Initialize LLM settings with 40-mini model
-            Settings.llm = OpenAI(
-                model="gpt-4o-mini",
+            # Initialize LLM settings with GPT-4
+            llm = OpenAI(
+                model="gpt-4",
                 api_key=os.getenv("OPENAI_API_KEY"),
                 temperature=0.1
             )
+            
+            Settings.llm = llm
         except Exception as e:
             st.error(f"Error initializing OpenAI: {str(e)}")
             st.stop()
@@ -151,7 +153,7 @@ def main():
                       api_key = os.getenv("OPENAI_API_KEY")
                       os.environ["OPENAI_API_KEY"] = api_key
                       llm = OpenAI(
-                           model="gpt-4o-mini",
+                           model="gpt-4",
                            api_key=api_key,
                            temperature=0.1
                       )
