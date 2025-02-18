@@ -185,44 +185,32 @@ def create_sample_data(db):
         print(f"Error creating sample data: {str(e)}")
         return 0
 
-def fetch_employees(db, filters: Dict) -> List[Dict]:
-    """Fetch employees matching the given filters"""
-    try:
-        # Start with base query
-        query = db.collection('employees')
-        
-        # Apply filters using where() instead of filter()
-        if 'location' in filters:
-            query = query.where('location', '==', filters['location'])
-            
-        if 'rank' in filters:
-            query = query.where('rank.official_name', '==', filters['rank'])
-            
-        if 'ranks' in filters:
-            query = query.where('rank.official_name', 'in', filters['ranks'])
-            
-        if 'skills' in filters:
-            query = query.where('skills', 'array_contains_any', filters['skills'])
-        
-        # Execute query
-        docs = query.stream()
-        
-        # Convert to list of dicts and add document ID
-        results = []
-        for doc in docs:
-            employee = doc.to_dict()
-            if 'rank' in employee and isinstance(employee['rank'], dict):
-                employee['rank'] = employee['rank']['official_name']
-            employee['id'] = doc.id
-            results.append(employee)
-            
-        if not results:
-            print(f"No results found for filters: {filters}")
-            
-        return results
-    except Exception as e:
-        print(f"Error fetching employees: {str(e)}")
-        return []
+def fetch_employees(db, filters: dict) -> List[dict]:
+    """Fetch employees based on filters"""
+    query = db.collection('employees')
+    
+    # Apply filters using where()
+    if 'rank' in filters:
+        query = query.where('rank.official_name', '==', filters['rank'])
+    
+    # Handle location filters
+    if 'location_in' in filters:
+        query = query.where('location', 'in', filters['location_in'])
+    elif 'location' in filters:
+        query = query.where('location', '==', filters['location'])
+    
+    if 'skills' in filters:
+        query = query.where('skills', 'array_contains_any', filters['skills'])
+    
+    # Convert to list of dicts and handle rank structure
+    results = []
+    for doc in query.stream():
+        employee = doc.to_dict()
+        if 'rank' in employee and isinstance(employee['rank'], dict):
+            employee['rank'] = employee['rank']['official_name']
+        results.append(employee)
+    
+    return results
 
 def fetch_availability(db, employee_number: str) -> dict:
     """Fetch availability for an employee"""

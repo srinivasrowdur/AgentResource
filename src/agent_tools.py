@@ -62,40 +62,113 @@ class ResourceQueryTools(BaseResourceQueryTools):
 
     def construct_query(self, query_str: str) -> dict:
         """Convert natural language to structured query"""
-        prompt = """Convert this query to a valid JSON query object.
-        Return ONLY the JSON object.
-
-        IMPORTANT RULES FOR CONSULTANT QUERIES:
-        1. "consultants in [location]" -> {"rank": "Consultant", "location": "[location]"}
-        2. "all consultants" -> {"ranks": ["Principal Consultant", "Managing Consultant", "Senior Consultant", "Consultant", "Consultant Analyst"]}
-        3. "all consultants below MC" -> {"ranks": ["Principal Consultant", "Senior Consultant", "Consultant", "Consultant Analyst", "Analyst"]}
-        4. "consulting resources" -> same as "all consultants"
-
-        Example queries and responses:
-        "consultants in London" -> {"rank":"Consultant","location":"London"}
-        "all consultants" -> {"ranks":["Principal Consultant","Managing Consultant","Senior Consultant","Consultant","Consultant Analyst"]}
-        "Frontend Developers in Oslo" -> {"skills":["Frontend Developer"],"location":"Oslo"}
-        
-        Query: {query}"""
-        
         try:
-            response = self.llm.complete(
-                prompt.format(query=query_str),
-                temperature=0.1
-            ).text
+            prompt = '''You are an intelligent query parser for employee searches. Your task is to extract and map information from natural language queries into structured JSON objects. Always ensure that your output is valid JSON.
+
+AVAILABLE DATA:
+1. Ranks (from highest to lowest):
+   - Partner
+   - Associate Partner
+   - Consulting Director
+   - Managing Consultant
+   - Principal Consultant
+   - Senior Consultant
+   - Consultant
+   - Consultant Analyst
+   - Analyst
+
+2. Locations:
+   - UK: London, Manchester, Bristol, Belfast
+   - Nordics: Copenhagen, Stockholm, Oslo
+
+3. Skills:
+   - Frontend Developer
+   - Backend Developer
+   - Full Stack Developer
+   - AWS Engineer
+   - Cloud Engineer
+   - DevOps Engineer
+   - Data Engineer
+   - Solution Architect
+   - Business Analyst
+   - Product Manager
+   - Agile Coach
+   - Scrum Master
+   - Project Manager
+   - Digital Consultant
+
+MAPPING RULES:
+1. Location Mapping:
+   - For "outside UK" or "outside the UK":
+     {{"locations": ["Copenhagen", "Stockholm", "Oslo"]}}
+   - For "in UK" or "in the UK":
+     {{"locations": ["London", "Manchester", "Bristol", "Belfast"]}}
+   - For specific city:
+     {{"location": "City"}}  # Use exact city name
+
+2. Rank Mapping:
+   - For "all consultants" or similar:
+     {{"ranks": ["Principal Consultant", "Managing Consultant", "Senior Consultant", "Consultant", "Consultant Analyst"]}}
+   - For specific rank (handle plural forms):
+     {{"rank": "Exact Rank"}}  # Use exact rank name
+
+3. Skills Mapping:
+   - For skill matches (including synonyms):
+     {{"skills": ["Exact Skill"]}}  # Use exact skill name
+   - Examples:
+     "frontend engineer" -> {{"skills": ["Frontend Developer"]}}
+     "AWS resource" -> {{"skills": ["AWS Engineer"]}}
+
+GENERAL INSTRUCTIONS:
+- Identify keywords in the natural language query that correspond to ranks, locations, and skills
+- Correct for variations in wording (e.g., plural vs singular forms, synonyms, and different phrasing)
+- If the query includes multiple elements (e.g. a rank and a location), include all relevant keys in the resulting JSON
+- Always produce valid JSON as your output
+- Handle informal language (e.g. "devs" -> "Developer", "resources" -> match to appropriate rank/skill)
+- For ambiguous queries, use the most specific interpretation based on available data
+
+EXAMPLE QUERIES AND OUTPUTS:
+1. "consultants in London" -> 
+   {{"rank": "Consultant", "location": "London"}}
+
+2. "partners outside UK" -> 
+   {{"rank": "Partner", "locations": ["Copenhagen", "Stockholm", "Oslo"]}}
+
+3. "frontend developers in Oslo" -> 
+   {{"skills": ["Frontend Developer"], "location": "Oslo"}}
+
+4. "all consultants in UK" -> 
+   {{"ranks": ["Principal Consultant", "Managing Consultant", "Senior Consultant", "Consultant", "Consultant Analyst"], 
+    "locations": ["London", "Manchester", "Bristol", "Belfast"]}}
+
+5. "AWS engineers in Manchester" -> 
+   {{"skills": ["AWS Engineer"], "location": "Manchester"}}
+
+6. "available senior consultants" ->
+   {{"rank": "Senior Consultant"}}
+
+Query: {query}'''
+            
+            formatted_prompt = prompt.format(query=query_str)
+            response = self.llm.complete(formatted_prompt, temperature=0.1).text.strip()
             
             # Clean and parse JSON
-            response = response.strip()
             if not response.startswith('{'):
                 start = response.find('{')
                 end = response.rfind('}') + 1
                 if start >= 0 and end > start:
                     response = response[start:end]
+                else:
+                    return {}
             
-            structured_query = json.loads(response)
-            return self.validate_query(structured_query)
+            try:
+                structured_query = json.loads(response)
+                validated_query = self.validate_query(structured_query)
+                return validated_query
+            except json.JSONDecodeError:
+                return {}
             
-        except Exception as e:
+        except Exception:
             return {}
 
     def validate_query(self, query: dict) -> dict:
@@ -106,6 +179,13 @@ class ResourceQueryTools(BaseResourceQueryTools):
         if 'location' in query and isinstance(query['location'], str):
             if query['location'] in self.locations:
                 valid_query['location'] = query['location']
+        
+        # Handle location arrays for UK/non-UK queries
+        if 'locations' in query and isinstance(query['locations'], list):
+            valid_locations = [loc for loc in query['locations'] if loc in self.locations]
+            if valid_locations:
+                # Convert to 'in' query for Firestore
+                valid_query['location_in'] = valid_locations
         
         # Rank validation
         if 'rank' in query and isinstance(query['rank'], str):
@@ -413,20 +493,18 @@ class ResourceQueryTools(BaseResourceQueryTools):
                 Translates natural language queries into structured JSON format.
                 ALWAYS use this tool first to translate user queries.
                 
+                Input: A natural language query as a string
+                Output: A JSON formatted query
+                
                 EXAMPLE INPUTS AND OUTPUTS:
-                1. "consultants in London" -> 
-                   {"rank":"Consultant","location":"London"}
+                1. Input: "consultants in London"
+                   Output: {"rank":"Consultant","location":"London"}
                 
-                2. "all consultants" -> 
-                   {"ranks":["Principal Consultant","Managing Consultant","Senior Consultant","Consultant","Consultant Analyst"]}
+                2. Input: "all consultants"
+                   Output: {"ranks":["Principal Consultant","Managing Consultant","Senior Consultant","Consultant","Consultant Analyst"]}
                 
-                3. "Frontend Developers in Oslo" -> 
-                   {"skills":["Frontend Developer"],"location":"Oslo"}
-                
-                4. "all consultants below MC" -> 
-                   {"ranks":["Principal Consultant","Senior Consultant","Consultant","Consultant Analyst","Analyst"]}
-                
-                Use this BEFORE making any PeopleQuery calls.
+                3. Input: "Frontend Developers in Oslo"
+                   Output: {"skills":["Frontend Developer"],"location":"Oslo"}
                 """
             ),
             FunctionTool.from_defaults(
@@ -483,9 +561,16 @@ class ResourceQueryTools(BaseResourceQueryTools):
     def translate_query(self, query_str: str) -> str:
         """Translate natural language query to JSON structure"""
         try:
+            if not isinstance(query_str, str):
+                return "Error: Query must be a string"
+            
+            # Get structured query
             structured_query = self.construct_query(query_str)
             if not structured_query:
-                return "Error: Could not translate query. Please try again."
+                return "Error: Could not parse query structure"
+            
+            # Return formatted JSON
             return json.dumps(structured_query, indent=2)
+            
         except Exception as e:
             return f"Error translating query: {str(e)}"

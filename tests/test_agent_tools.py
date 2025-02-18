@@ -1,4 +1,4 @@
-from typing import List, Dict, Optional
+from typing import List, Dict, Optional, Union
 from src.query_tools.base import BaseResourceQueryTools
 import pytest
 from src.agent_tools import ResourceQueryTools
@@ -214,28 +214,50 @@ class MockResourceQueryTools:
             key=lambda x: self.RANK_HIERARCHY[x]
         )
 
+    def translate_query(self, query_input: Union[str, Dict]) -> str:
+        """Mock translation implementation"""
+        try:
+            # Handle both string and dict inputs
+            query_str = query_input.get('query_str', query_input) if isinstance(query_input, dict) else query_input
+            
+            if not isinstance(query_str, str):
+                return "Error: Query must be a string"
+            
+            # Get structured query
+            structured_query = self.construct_query(query_str)
+            if not structured_query:
+                return "Error: Could not parse query structure"
+            
+            # Return formatted JSON
+            return json.dumps(structured_query, indent=2)
+            
+        except Exception as e:
+            return f"Error translating query: {str(e)}"
+
     def construct_query(self, query_str: str) -> dict:
         """Mock implementation without LLM"""
+        print(f"\nDEBUG MOCK: Received query: {query_str}")
+        
+        # Input validation
+        if not isinstance(query_str, str):
+            return {}
+        
         query_lower = query_str.lower()
         query = {}
         
-        # Handle availability queries first
-        if 'available' in query_lower:
-            # Extract weeks first
-            if 'weeks 3 and 4' in query_lower:
-                query['weeks'] = [3, 4]
-            elif 'week 3' in query_lower:
-                query['weeks'] = [3]
-            
-            # Then add rank if needed
-            if 'consultant' in query_lower and not 'all consultant' in query_lower:
-                query['rank'] = 'Consultant'
-            
+        # Handle "all consultant resources" first - includes everyone
+        if "all consultant resources" in query_lower:
+            print("\nDEBUG MOCK: Processing 'all consultant resources' query")
+            query['ranks'] = sorted(
+                list(self.RANK_HIERARCHY.keys()),
+                key=lambda x: self.RANK_HIERARCHY[x]
+            )
             return query
         
-        # Handle "below X" queries first (including "all consultants below X")
+        # Handle "below X" queries
         if "below" in query_lower:
-            if "mc" in query_lower:
+            print("\nDEBUG MOCK: Processing 'below' query")
+            if "mc" in query_lower or "managing consultant" in query_lower:
                 query['ranks'] = self.get_ranks_below("Managing Consultant")
                 return query
             
@@ -243,57 +265,51 @@ class MockResourceQueryTools:
                 if rank.lower() in query_lower:
                     query['ranks'] = self.get_ranks_below(rank)
                     return query
-
-        # Handle "all consultant resources" - includes everyone
-        if "all consultant resources" in query_lower:
-            query['ranks'] = sorted(
-                list(self.RANK_HIERARCHY.keys()),
-                key=lambda x: self.RANK_HIERARCHY[x]
-            )
-            
-            # Add location if present
-            for location in self.locations:
-                if location.lower() in query_lower:
-                    query['location'] = location
-            
-            return query
         
         # Handle "all consultants" or "consulting resources"
         if any(phrase in query_lower for phrase in ["all consultants", "consulting resources"]):
+            print("\nDEBUG MOCK: Processing 'all consultants' query")
             query['ranks'] = [
                 'Principal Consultant', 'Managing Consultant', 'Senior Consultant',
                 'Consultant', 'Consultant Analyst'
             ]
-            
-            # Add location if present
-            for location in self.locations:
-                if location.lower() in query_lower:
-                    query['location'] = location
-            
-            return query
-
-        # Location handling
-        for location in self.locations:
-            if location.lower() in query_lower:
-                query['location'] = location
-
-        # Regular rank handling
-        for rank in self.RANK_HIERARCHY.keys():
-            if rank.lower() in query_lower and not any(x in query_lower for x in ["all", "below"]):
-                query['rank'] = rank
-                break
-
-        # Skills handling
+        
+        # Handle specific ranks
+        elif "consultant" in query_lower:
+            print("\nDEBUG MOCK: Processing specific rank query")
+            if "senior consultant" in query_lower:
+                query['rank'] = "Senior Consultant"
+            elif "principal consultant" in query_lower:
+                query['rank'] = "Principal Consultant"
+            elif "managing consultant" in query_lower:
+                query['rank'] = "Managing Consultant"
+            elif "consultant analyst" in query_lower:
+                query['rank'] = "Consultant Analyst"
+            else:
+                query['rank'] = "Consultant"
+        
+        # Handle skills
         for skill in self.standard_skills:
             if skill.lower() in query_lower:
+                print(f"\nDEBUG MOCK: Found skill: {skill}")
                 query.setdefault('skills', []).append(skill)
         
+        # Handle locations
+        for location in self.locations:
+            if location.lower() in query_lower:
+                print(f"\nDEBUG MOCK: Found location: {location}")
+                query['location'] = location
+        
+        # Handle availability
+        if 'available' in query_lower:
+            print("\nDEBUG MOCK: Processing availability query")
+            if 'weeks 3 and 4' in query_lower:
+                query['weeks'] = [3, 4]
+            elif 'week 3' in query_lower:
+                query['weeks'] = [3]
+        
+        print(f"\nDEBUG MOCK: Returning query: {query}")
         return query
-
-    def translate_query(self, query_str: str) -> str:
-        """Mock translation implementation"""
-        structured_query = self.construct_query(query_str)
-        return json.dumps(structured_query, indent=2)
 
 # Updated test cases
 @pytest.mark.parametrize("query,expected", [
@@ -399,3 +415,77 @@ def test_query_flow():
     # Then use the JSON for people query
     results = tools.query_people(json_query)
     assert "| Name | Location | Rank |" in results  # Check table format 
+
+def test_query_translator_input_handling():
+    """Test QueryTranslator handles different input formats"""
+    tools = MockResourceQueryTools()
+    
+    # Test string input
+    result1 = tools.translate_query("consultants in London")
+    assert "rank" in result1 and "location" in result1
+    
+    # Test dict input
+    result2 = tools.translate_query({"query_str": "consultants in London"})
+    assert "rank" in result2 and "location" in result2
+    
+    # Test invalid input
+    result3 = tools.translate_query(None)
+    assert "Error" in result3
+    
+    # Test empty string
+    result4 = tools.translate_query("")
+    assert "Error" in result4
+
+@pytest.mark.parametrize("query,expected", [
+    (
+        "consultants in London",
+        {"rank": "Consultant", "location": "London"}
+    ),
+    (
+        {"query_str": "consultants in London"},
+        {"rank": "Consultant", "location": "London"}
+    ),
+    (
+        "all consultants",
+        {"ranks": ["Principal Consultant", "Managing Consultant", "Senior Consultant", 
+                  "Consultant", "Consultant Analyst"]}
+    ),
+    (
+        "Frontend Developers in Oslo",
+        {"skills": ["Frontend Developer"], "location": "Oslo"}
+    ),
+])
+def test_query_translator_accuracy(query, expected):
+    """Test QueryTranslator produces correct JSON"""
+    tools = MockResourceQueryTools()
+    result = tools.translate_query(query)
+    assert json.loads(result) == expected 
+
+def test_agent_query_format():
+    """Test the exact format the agent uses"""
+    tools = MockResourceQueryTools()
+    
+    # Test agent's format
+    result = tools.translate_query({"query_str": "consultants in London"})
+    expected = {
+        "rank": "Consultant",
+        "location": "London"
+    }
+    assert json.loads(result) == expected
+    
+    # Test with different queries
+    test_cases = [
+        (
+            {"query_str": "consultants in London"},
+            {"rank": "Consultant", "location": "London"}
+        ),
+        (
+            {"query_str": "all consultants"},
+            {"ranks": ["Principal Consultant", "Managing Consultant", "Senior Consultant", 
+                      "Consultant", "Consultant Analyst"]}
+        ),
+    ]
+    
+    for query, expected in test_cases:
+        result = tools.translate_query(query)
+        assert json.loads(result) == expected 

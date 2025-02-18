@@ -85,7 +85,6 @@ def main():
                 api_key=os.getenv("OPENAI_API_KEY"),
                 temperature=0.1
             )
-            
             Settings.llm = llm
         except Exception as e:
             st.error(f"Error initializing OpenAI: {str(e)}")
