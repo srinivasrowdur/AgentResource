@@ -229,8 +229,53 @@ class TestEdgeCases:
         result = tools.construct_query(query)
         assert result == expected
 
+class TestNonResourceQueries:
+    """Test handling of non-resource related queries"""
+    
+    @pytest.fixture
+    def tools(self):
+        return MockResourceQueryTools()
+    
+    @pytest.mark.parametrize("query,expected_message", [
+        (
+            "what's the weather today?",
+            "Sorry, I cannot help with that query. I can only assist with resource management related questions."
+        ),
+        (
+            "tell me a joke",
+            "Sorry, I cannot help with that query. I can only assist with resource management related questions."
+        ),
+        (
+            "what time is it?",
+            "Sorry, I cannot help with that query. I can only assist with resource management related questions."
+        ),
+        (
+            "help me with my taxes",
+            "Sorry, I cannot help with that query. I can only assist with resource management related questions."
+        )
+    ])
+    def test_non_resource_queries(self, tools, query, expected_message):
+        """Test that non-resource queries return the standard error message"""
+        result = tools.handle_non_resource_query(query)
+        assert result == expected_message
+        # Verify that query construction returns empty for non-resource queries
+        assert tools.construct_query(query) == {}
+
+    @pytest.mark.parametrize("query", [
+        "find consultants in London",
+        "available developers in Manchester",
+        "senior engineers with AWS skills"
+    ])
+    def test_valid_resource_queries(self, tools, query):
+        """Test that valid resource queries are processed normally"""
+        # First verify non-resource handler returns empty string
+        assert tools.handle_non_resource_query(query) == ""
+        # Then verify query construction returns non-empty result
+        assert tools.construct_query(query) != {}
+        assert isinstance(tools.construct_query(query), dict)
+
 @pytest.fixture(autouse=True)
 def mock_firebase(monkeypatch):
     """Mock Firebase for all tests"""
     from tests.mock_utils import mock_fetch_employees
-    monkeypatch.setattr('firebase_utils.fetch_employees', mock_fetch_employees) 
+    monkeypatch.setattr('firebase_utils.fetch_employees', mock_fetch_employees)

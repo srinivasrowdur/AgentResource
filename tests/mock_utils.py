@@ -1,64 +1,77 @@
-from typing import Dict, List, Optional
-
-class MockFirebase:
+class MockResourceQueryTools:
     def __init__(self):
-        self.data = {
-            'employees': [
-                {
-                    'name': 'John Smith',
-                    'location': 'London',
-                    'rank': {'level': 6, 'official_name': 'Consultant'},
-                    'skills': ['AWS Engineer', 'Frontend Developer'],
-                    'employee_number': 'EMP001'
-                },
-                # Add more mock data as needed
-            ]
+        self.locations = [
+            "London", "Manchester", "Bristol", "Belfast",
+            "Copenhagen", "Stockholm", "Oslo"
+        ]
+        self.standard_skills = {
+            "Frontend Developer",
+            "Backend Developer",
+            "AWS Engineer",
+            "Full Stack Developer",
+            "Cloud Engineer",
+            "Architect",
+            "Product Manager",
+            "Agile Coach",
+            "Business Analyst"
         }
 
-MOCK_EMPLOYEES = [
-    {
-        'id': '1',
-        'name': 'John Smith',
-        'location': 'London',
-        'rank': 'Consultant',
-        'skills': ['Frontend Developer', 'AWS Engineer']
-    },
-    {
-        'id': '2',
-        'name': 'Jane Doe',
-        'location': 'London',
-        'rank': 'Senior Consultant',
-        'skills': ['Backend Developer', 'Cloud Engineer']
-    }
-]
-
-def mock_fetch_employees(db, filters: Dict) -> List[Dict]:
-    """Mock implementation for testing"""
-    results = MOCK_EMPLOYEES.copy()
-    
-    # Apply filters
-    if 'location' in filters:
-        results = [e for e in results if e['location'] == filters['location']]
-    if 'rank' in filters:
-        results = [e for e in results if e['rank'] == filters['rank']]
-    if 'ranks' in filters:
-        results = [e for e in results if e['rank'] in filters['ranks']]
-    if 'skills' in filters:
-        results = [e for e in results if any(s in e['skills'] for s in filters['skills'])]
+    def handle_non_resource_query(self, query: str) -> str:
+        """Handle queries not related to resource management"""
+        resource_keywords = [
+            "consultant", "developer", "engineer", "resource", 
+            "london", "manchester", "available", "skill"
+        ]
         
-    return results
+        query_lower = query.lower()
+        if any(keyword in query_lower for keyword in resource_keywords):
+            return ""
+            
+        return "Sorry, I cannot help with that query. I can only assist with resource management related questions."
 
-def mock_fetch_availability(db, employee_id, week):
-    """Mock implementation of fetch_availability"""
-    return {'status': 'Available'}
-
-def mock_fetch_availability_batch(db, employee_numbers, weeks):
-    """Mock implementation of fetch_availability_batch"""
-    return {
-        emp_id: {
-            'employee_data': {'name': 'John Smith'},
-            'availability': {'pattern_description': 'Generally available'},
-            'weeks': {f'week_{w}': {'status': 'Available'} for w in weeks}
+def mock_fetch_employees():
+    """Mock function to return test employee data"""
+    return [
+        {
+            "name": "John Doe",
+            "location": "London",
+            "rank": "Consultant",
+            "skills": ["Frontend Developer"],
+            "employee_number": "E001"
+        },
+        {
+            "name": "Jane Smith",
+            "location": "Manchester",
+            "rank": "Senior Consultant",
+            "skills": ["Backend Developer"],
+            "employee_number": "E002"
+        },
+        {
+            "name": "Alice Johnson",
+            "location": "Bristol",
+            "rank": "Consultant",
+            "skills": ["Full Stack Developer"],
+            "employee_number": "E003"
+        },
+        {
+            "name": "Bob Wilson",
+            "location": "Oslo",
+            "rank": "Principal Consultant",
+            "skills": ["Cloud Engineer"],
+            "employee_number": "E004"
+        },
+        {
+            "name": "Carol Brown",
+            "location": "Stockholm",
+            "rank": "Managing Consultant",
+            "skills": ["Architect"],
+            "employee_number": "E005"
+        },
+        {
+            "name": "David Miller",
+            "location": "Belfast",
+            "rank": "Senior Consultant",
+            "skills": ["AWS Engineer"],
+            "employee_number": "E006"
         }
-        for emp_id in employee_numbers
-    } 
+    ]

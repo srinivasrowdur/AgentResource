@@ -234,6 +234,20 @@ class MockResourceQueryTools:
         except Exception as e:
             return f"Error translating query: {str(e)}"
 
+    def handle_non_resource_query(self, query: str) -> str:
+        """Handle queries not related to resource management"""
+        resource_keywords = [
+            "consultant", "developer", "engineer", "resource", 
+            "london", "manchester", "available", "skill",
+            "below", "people", "employees", "resources"
+        ]
+        
+        query_lower = query.lower()
+        if any(keyword in query_lower for keyword in resource_keywords):
+            return ""
+            
+        return "Sorry, I cannot help with that query. I can only assist with resource management related questions."
+
     def construct_query(self, query_str: str) -> dict:
         """Mock implementation without LLM"""
         print(f"\nDEBUG MOCK: Received query: {query_str}")
@@ -253,6 +267,19 @@ class MockResourceQueryTools:
                 key=lambda x: self.RANK_HIERARCHY[x]
             )
             return query
+            
+        # Handle engineer queries
+        if "engineer" in query_lower:
+            if "senior" in query_lower:
+                query['rank'] = "Senior Consultant"
+            else:
+                query['rank'] = "Consultant"
+            
+            # Add AWS skill if specified
+            if "aws" in query_lower:
+                query['skills'] = ["AWS Engineer"]
+            else:
+                query['skills'] = ["Cloud Engineer"]
         
         # Handle "below X" queries
         if "below" in query_lower:
@@ -488,4 +515,4 @@ def test_agent_query_format():
     
     for query, expected in test_cases:
         result = tools.translate_query(query)
-        assert json.loads(result) == expected 
+        assert json.loads(result) == expected
