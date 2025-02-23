@@ -86,11 +86,6 @@ def main():
                 temperature=0.1
             )
             Settings.llm = llm
-            
-            # Initialize tools and agent
-            tools = ResourceQueryTools(db, availability_db, llm).get_tools()
-            agent = create_agent(tools, llm, st.session_state.messages if 'messages' in st.session_state else None)
-            
         except Exception as e:
             st.error(f"Error initializing OpenAI: {str(e)}")
             st.stop()
@@ -141,19 +136,55 @@ def main():
             st.session_state.last_employee_number = None
 
         def handle_query(prompt: str):
-            """Handle user query and update chat history"""
-            try:
-                # Add user message to chat history
-                st.session_state.messages.append({"role": "user", "content": prompt})
-                
-                # Get agent response
-                response = agent.chat(prompt)
-                
-                # Add assistant response to chat history
-                st.session_state.messages.append({"role": "assistant", "content": response})
-                
-            except Exception as e:
-                st.error(f"Error processing query: {str(e)}")
+            # Legacy implementation using a single consolidated call via our agent.
+            if not prompt:
+                 return
+
+            # Add the user message to session state.
+            st.session_state.messages.append({"role": "user", "content": prompt})
+
+            # Create a placeholder for the assistant's response.
+            with st.chat_message("assistant"):
+                 message_placeholder = st.empty()
+
+                 with st.spinner("Thinking..."):
+                      # Force update API key and create fresh LLM instance using 40-mini.
+                      api_key = os.getenv("OPENAI_API_KEY")
+                      os.environ["OPENAI_API_KEY"] = api_key
+                      llm = OpenAI(
+                           model="gpt-4",
+                           api_key=api_key,
+                           temperature=0.1
+                      )
+                      Settings.llm = llm
+
+                      # Build sanitized chat history from the last 5 messages.
+                      sanitized_history = []
+                      for msg in st.session_state.messages[-5:]:
+                           current_role = "user" if msg.get("role", "").lower() == "user" else "assistant"
+                           sanitized_history.append({"role": current_role, "content": msg["content"]})
+
+                      # Build chat history (ChatMessage objects) using sanitized history.
+                      from llama_index.core.llms import ChatMessage, MessageRole
+                      chat_history = []
+                      for msg in sanitized_history:
+                           role = MessageRole.USER if msg["role"] == "user" else MessageRole.ASSISTANT
+                           chat_history.append(ChatMessage(role=role, content=msg["content"]))
+
+                      # Create tools and agent using the legacy approach.
+                      current_agent = create_agent(tools.get_tools(), llm, chat_history=sanitized_history)
+                      response = current_agent.chat(prompt, chat_history=chat_history)
+
+                      formatted_response = format_agent_response(response.response)
+                      message_placeholder.markdown(formatted_response)
+
+                      st.session_state.messages.append({
+                           "role": "assistant",
+                           "content": formatted_response,
+                           "context": response.response
+                      })
+
+                      st.rerun()
 
         # Streamlit UI
         st.title("Resource Management Assistant")

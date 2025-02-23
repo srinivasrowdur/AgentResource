@@ -483,9 +483,33 @@ Query: {query}'''
         
         return "Please specify a rank query like 'below MC' or 'below Partner'"
 
+    def handle_non_resource_query(self, query: str) -> str:
+        """Handle queries that are not related to resource management"""
+        # List of keywords that indicate resource-related queries
+        resource_keywords = [
+            'consultant', 'partner', 'analyst', 'available', 'location',
+            'london', 'manchester', 'bristol', 'belfast', 'oslo', 'copenhagen',
+            'stockholm', 'skill', 'developer', 'engineer', 'architect',
+            'week', 'availability', 'rank', 'senior', 'junior', 'mc', 'principal'
+        ]
+        
+        # Check if query contains any resource-related keywords
+        query_lower = query.lower()
+        if not any(keyword in query_lower for keyword in resource_keywords):
+            return "Sorry, I cannot help with that query. I can only assist with resource management related questions."
+        return ""
+
     def get_tools(self):
         """Get the tools for the agent"""
         return [
+            FunctionTool.from_defaults(
+                fn=self.handle_non_resource_query,
+                name="NonResourceQueryHandler",
+                description="""Handles non-resource management related queries.
+                ALWAYS use this tool FIRST to check if the query is resource-related.
+                If the query is not related to resource management, returns a standard message.
+                If the query is resource-related, returns an empty string."""
+            ),
             FunctionTool.from_defaults(
                 fn=self.translate_query,
                 name="QueryTranslator",
