@@ -21,10 +21,8 @@ load_dotenv()
 st.cache_resource.clear()
 st.cache_data.clear()
 
-# Check for required environment variables
-if not os.getenv('FIREBASE_CREDENTIALS_PATH'):
-    st.error("Firebase credentials path not set. Please set FIREBASE_CREDENTIALS_PATH in .env file")
-    st.stop()
+# Check for OpenAI API key
+# Firebase credentials will be checked during initialization
 
 if not os.getenv('OPENAI_API_KEY'):
     st.error("OpenAI API key not set. Please set OPENAI_API_KEY in .env file")
