@@ -20,8 +20,12 @@ def initialize_firebase(cred_path=None):
                 cred = credentials.Certificate(cred_path)
             else:
                 # Try to get credentials from Streamlit secrets
-                firebase_config = st.secrets["firebase"]
-                cred = credentials.Certificate(firebase_config)
+                firebase_config = st.secrets["firebase"]["my_project_settings"]
+                # Ensure the config is a dictionary
+                if isinstance(firebase_config, dict):
+                    cred = credentials.Certificate(firebase_config)
+                else:
+                    raise ValueError("Firebase configuration must be a dictionary")
             firebase_admin.initialize_app(cred)
         except Exception as e:
             st.error(f"Failed to initialize Firebase: {str(e)}")
