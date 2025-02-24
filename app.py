@@ -30,36 +30,11 @@ if not os.getenv('OPENAI_API_KEY'):
     st.error("OpenAI API key not set. Please set OPENAI_API_KEY in .env file")
     st.stop()
 
-def run_tests():
-    """Run all tests and return True if all pass"""
-    # Get the root directory
-    root_dir = Path(__file__).parent
-    
-    # Run pytest programmatically
-    test_result = pytest.main([
-        str(root_dir / "tests"),  # Test directory
-        "-v",                     # Verbose output
-        "--no-header",           # No header
-        "-W", "ignore::pytest.PytestCollectionWarning"  # Ignore collection warnings
-    ])
-    
-    return test_result == pytest.ExitCode.OK
-
 def main():
     # Add command line argument parsing
     parser = argparse.ArgumentParser()
-    parser.add_argument("--skip-tests", action="store_true", help="Skip running tests")
     parser.add_argument("--reset-db", action="store_true", help="Reset database with sample data")
     args = parser.parse_args()
-
-    # Only run tests on initial startup, not on reruns
-    if not args.skip_tests and not st.session_state.get('tests_run'):
-        if run_tests():
-            st.session_state.tests_run = True
-        else:
-            st.error("⚠️ Tests failed! Please check the test output in the console.")
-            st.stop()
-            sys.exit(1)
 
     try:
         # Initialize Firebase
@@ -224,4 +199,4 @@ def main():
         st.stop()
 
 if __name__ == "__main__":
-    main() 
+    main()
