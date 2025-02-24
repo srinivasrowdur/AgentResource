@@ -63,7 +63,7 @@ class ResourceQueryTools(BaseResourceQueryTools):
     def construct_query(self, query_str: str) -> dict:
         """Convert natural language to structured query"""
         try:
-            prompt = '''You are an intelligent query parser for employee searches. Your task is to extract and map information from natural language queries into structured JSON objects. Always ensure that your output is valid JSON.
+            prompt = '''You are an intelligent query parser for employee searches. Your task is to extract and map information from natural language queries into structured JSON objects. ALWAYS ensure that your output is valid JSON.
 
 AVAILABLE DATA:
 1. Ranks (from highest to lowest):
@@ -308,28 +308,43 @@ Query: {query}'''
     def query_availability(self, employee_numbers: Union[str, List[str]], weeks: Optional[List[int]] = None) -> str:
         """First get employees matching criteria, then check their availability"""
         try:
+            # Input validation
+            if not employee_numbers:
+                return "Error: No employee numbers provided"
+
             # Get employees first if we have a query string
             if isinstance(employee_numbers, dict) and "query_str" in employee_numbers:
                 results = self.query_people(employee_numbers["query_str"])
                 if isinstance(results, str) and "No matching employees found" not in results:
-                    employee_numbers = [line.split("|")[-2].strip() for line in results.split("\n")[2:] if "|" in line]
+                    employee_numbers = [line.split("|")[-2].strip() for line in results.split("\n")[2:] if "|" in line and "EMP" in line]
 
+            # Ensure employee_numbers is a list
             if isinstance(employee_numbers, str):
                 employee_numbers = [employee_numbers]
             
+            # Validate employee numbers format
+            valid_emp_numbers = [emp for emp in employee_numbers if isinstance(emp, str) and emp.startswith("EMP")]
+            if not valid_emp_numbers:
+                return "Error: No valid employee numbers found"
+
+            # Set default weeks if not provided
             if not weeks:
                 weeks = list(range(1, 9))
             
             # Use existing fetch_availability_batch function
-            results = fetch_availability_batch(self.db, employee_numbers, weeks)
-            
+            results = fetch_availability_batch(self.db, valid_emp_numbers, weeks)
+            if not results:
+                return "No availability data found for the specified employees"
+
             # Format as markdown table
-            # Create header only for requested weeks
             week_headers = [f"Week {w}" for w in weeks]
             table = f"| Name | Pattern | {' | '.join(week_headers)} |\n"
             table += f"|------|---------|{'|'.join(['---'] * len(week_headers))}|"
             
             for emp_id, data in results.items():
+                if not data.get("employee_data") or not data.get("availability"):
+                    continue
+
                 name = data["employee_data"].get("name", "Unknown")
                 pattern = data["availability"].get("pattern_description", "")
                 
@@ -343,7 +358,7 @@ Query: {query}'''
                 # Add row to table
                 table += f"\n| {name} | {pattern} | {' | '.join(week_status)} |"
             
-            return table
+            return table if table.count("\n") > 1 else "No availability data found"
             
         except Exception as e:
             return f"Error querying availability: {str(e)}"
@@ -462,26 +477,7 @@ Query: {query}'''
         except Exception as e:
             return f"Error querying available people: {str(e)}"
 
-    def get_ranks_tool(self, query_str: str) -> str:
-        """Tool interface for rank queries"""
-        # Handle both string and dict inputs
-        if isinstance(query_str, dict):
-            query_str = query_str.get('query_str', '')
-        
-        query_lower = str(query_str).lower()
-        
-        if "below" in query_lower:
-            # Special handling for MC
-            if "mc" in query_lower:
-                ranks = self.get_ranks_below("Managing Consultant")
-                return f"Ranks below Managing Consultant (MC):\n- " + "\n- ".join(ranks)
-            # Handle other ranks
-            for rank in self.RANK_HIERARCHY.keys():
-                if rank.lower().replace(' ', '') in query_lower:
-                    ranks = self.get_ranks_below(rank)
-                    return f"Ranks below {rank}:\n- " + "\n- ".join(ranks)
-        
-        return "Please specify a rank query like 'below MC' or 'below Partner'"
+
 
     def handle_non_resource_query(self, query: str) -> str:
         """Handle queries that are not related to resource management"""
@@ -545,28 +541,7 @@ Query: {query}'''
                 - skills: array of skill names
                 """
             ),
-            FunctionTool.from_defaults(
-                fn=self.get_ranks_tool,
-                name="RankQuery",
-                description="""
-                Get information about rank hierarchy.
-                
-                WHEN TO USE:
-                - When you need to understand which ranks are below another rank
-                - When you need to verify the rank hierarchy
-                - Before making complex rank-based queries
-                
-                RANK HIERARCHY (highest to lowest):
-                Partner > Associate Partner = Consulting Director > Managing Consultant (MC) >
-                Principal Consultant > Senior Consultant > Consultant > Consultant Analyst > Analyst
-                
-                EXAMPLE QUERIES:
-                - "below MC" -> returns all ranks below Managing Consultant
-                - "below Partner" -> returns all ranks below Partner
-                
-                Use this tool to understand rank relationships before making PeopleQuery calls.
-                """
-            ),
+
             FunctionTool.from_defaults(
                 fn=self.query_availability,
                 name="AvailabilityQuery",

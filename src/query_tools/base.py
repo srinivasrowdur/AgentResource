@@ -84,10 +84,14 @@ class BaseResourceQueryTools(ABC):
                 ]
             elif is_hierarchy_query:
                 # Use hierarchy-based ordering for "below X" queries
-                if "mc" in query_lower:
+                if "mc" in query_lower or "management consultant" in query_lower:
                     query["ranks"] = self.get_ranks_below("Managing Consultant")
-                elif "principal" in query_lower:
-                    query["ranks"] = self.get_ranks_below("Principal Consultant")
+                else:
+                    # Check for other ranks
+                    for rank in self.RANK_HIERARCHY.keys():
+                        if rank.lower() in query_lower:
+                            query["ranks"] = self.get_ranks_below(rank)
+                            break
             elif "senior consultant" in query_lower:
                 query["rank"] = "Senior Consultant"
             elif "consultant" in query_lower and not any(mod in query_lower 
@@ -133,4 +137,4 @@ class BaseResourceQueryTools(ABC):
     @abstractmethod
     def query_people(self, query_str: str) -> str:
         """Must be implemented by concrete classes"""
-        pass 
+        pass
