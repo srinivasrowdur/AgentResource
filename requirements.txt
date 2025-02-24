@@ -3,3 +3,4 @@ firebase-admin
 llama-index
 python-dotenv
 names 
+pytest
