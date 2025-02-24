@@ -21,21 +21,17 @@ def initialize_firebase(cred_path=None):
             else:
                 # Try to get credentials from Streamlit secrets
                 firebase_config = st.secrets["firebase"]["my_project_settings"]
-                # Parse TOML format to ensure proper dictionary structure
-                if isinstance(firebase_config, (dict, st._config.ConfigDict)):
-                    # Convert to regular dict if it's a ConfigDict
-                    config_dict = dict(firebase_config)
-                    # Validate required fields
-                    required_fields = ["type", "project_id", "private_key_id", "private_key",
-                                     "client_email", "client_id", "auth_uri", "token_uri",
-                                     "auth_provider_x509_cert_url", "client_x509_cert_url"]
-                    if all(field in config_dict for field in required_fields):
-                        cred = credentials.Certificate(config_dict)
-                    else:
-                        missing_fields = [field for field in required_fields if field not in config_dict]
-                        raise ValueError(f"Missing required Firebase fields: {', '.join(missing_fields)}")
+                # Convert config to dictionary and validate
+                config_dict = dict(firebase_config)
+                # Validate required fields
+                required_fields = ["type", "project_id", "private_key_id", "private_key",
+                                 "client_email", "client_id", "auth_uri", "token_uri",
+                                 "auth_provider_x509_cert_url", "client_x509_cert_url"]
+                if all(field in config_dict for field in required_fields):
+                    cred = credentials.Certificate(config_dict)
                 else:
-                    raise ValueError("Firebase configuration must be a dictionary or ConfigDict")
+                    missing_fields = [field for field in required_fields if field not in config_dict]
+                    raise ValueError(f"Missing required Firebase fields: {', '.join(missing_fields)}")
             firebase_admin.initialize_app(cred)
         except Exception as e:
             st.error(f"Failed to initialize Firebase: {str(e)}")
